@@ -1,0 +1,464 @@
+{
+  "CColorDef": {
+    "create": 5850352,
+    "ctor": null,
+    "vtable": null,
+    "serialize": null,
+    "slots": []
+  },
+  "CDocumentPage": {
+    "create": 9224144,
+    "ctor": 9223200,
+    "vtable": 17317668,
+    "serialize": 9212000,
+    "slots": [
+      "0x8c5d20",
+      "0x8c9ad0",
+      "0x8c9af0",
+      "0x8c63d0",
+      "0x8c9060",
+      "0x8c63e0",
+      "0x8c9070",
+      "0x8c5ff0"
+    ]
+  },
+  "CMediaBits": {
+    "create": 9259392,
+    "ctor": 9256528,
+    "vtable": 17320988,
+    "serialize": 9257920,
+    "slots": [
+      "0x8d3e20",
+      "0x8d51b0",
+      "0x8d5ca0",
+      "0x8d4380",
+      "0x8d43c0",
+      "0x8d51d0",
+      "0x8d6150",
+      "0x8d3ef0"
+    ]
+  },
+  "CMediaElem": {
+    "create": 9271344,
+    "ctor": 9270352,
+    "vtable": 17321332,
+    "serialize": 9265472,
+    "slots": [
+      "0x8d6100",
+      "0x8d6fd0",
+      "0x8d7550",
+      "0x8d6130",
+      "0x8d6140",
+      "0x8d6b10",
+      "0x8d6150",
+      "0x8d3ef0"
+    ]
+  },
+  "CMediaSound": {
+    "create": 9278864,
+    "ctor": 9276384,
+    "vtable": 17322076,
+    "serialize": 9272128,
+    "slots": [
+      "0x8d7980",
+      "0x8d95f0",
+      "0x8d9df0",
+      "0x8d7af0",
+      "0x8d7b40",
+      "0x8d8a20",
+      "0x8d6150",
+      "0x8d3ef0"
+    ]
+  },
+  "CMediaVideo": {
+    "create": 9290400,
+    "ctor": 9270352,
+    "vtable": 17321332,
+    "serialize": 9265472,
+    "slots": [
+      "0x8d6100",
+      "0x8d6fd0",
+      "0x8d7550",
+      "0x8d6130",
+      "0x8d6140",
+      "0x8d6b10",
+      "0x8d6150",
+      "0x8d3ef0"
+    ]
+  },
+  "CMediaVideoStream": {
+    "create": 9320000,
+    "ctor": 9318704,
+    "vtable": 17323708,
+    "serialize": 9299264,
+    "slots": [
+      "0x8ddd70",
+      "0x8e4e50",
+      "0x8d7550",
+      "0x8e3a40",
+      "0x8de540",
+      "0x8e0220",
+      "0x8d6150",
+      "0x8d3ef0"
+    ]
+  },
+  "CMorphCurve": {
+    "create": 7822592,
+    "ctor": 7822656,
+    "vtable": null,
+    "serialize": null,
+    "slots": []
+  },
+  "CMorphHintItem": {
+    "create": 7804816,
+    "ctor": 7792544,
+    "vtable": 17168824,
+    "serialize": 6619219,
+    "slots": [
+      "0x7717f0",
+      "0x76ec60",
+      "0x76ec90",
+      null,
+      "0x650053",
+      "0x690072",
+      "0x75006f",
+      "0x200073"
+    ]
+  },
+  "CMorphSegment": {
+    "create": 7822496,
+    "ctor": 7809664,
+    "vtable": 17169100,
+    "serialize": 15572966,
+    "slots": [
+      "0x771720",
+      "0x775e70",
+      "0x7782c0",
+      "0x1152630",
+      "0xed9fe6",
+      "0x777680",
+      "0x401820",
+      "0x54442d11"
+    ]
+  },
+  "CPicBitmap": {
+    "create": 9339664,
+    "ctor": 9333472,
+    "vtable": 17323876,
+    "serialize": 9236128,
+    "slots": [
+      "0x8e6ab0",
+      "0x8e86a0",
+      "0x8e8710",
+      "0x8e8980",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x8e6c00"
+    ]
+  },
+  "CPicButton": {
+    "create": 9346704,
+    "ctor": 9345296,
+    "vtable": 17324236,
+    "serialize": 9341856,
+    "slots": [
+      "0x8e8b30",
+      "0x8e9ef0",
+      "0x8ea9f0",
+      "0x914890",
+      "0x8e8ba0",
+      "0x903c40",
+      "0x9148d0",
+      "0x8e9160"
+    ]
+  },
+  "CPicFont": {
+    "create": 9238048,
+    "ctor": 9448336,
+    "vtable": 17326076,
+    "serialize": 9236128,
+    "slots": [
+      "0x8ff1e0",
+      "0x902c50",
+      "0x902d70",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x902c70"
+    ]
+  },
+  "CPicFrame": {
+    "create": 9415280,
+    "ctor": 9414720,
+    "vtable": 17325388,
+    "serialize": 9236128,
+    "slots": [
+      "0x8f0ee0",
+      "0x8f7380",
+      "0x8fdb80",
+      "0x8f3b90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x8f4320"
+    ]
+  },
+  "CPicLayer": {
+    "create": 15944656,
+    "ctor": 15960096,
+    "vtable": 17325740,
+    "serialize": 9236128,
+    "slots": [
+      "0xf34ae0",
+      "0xf38940",
+      "0xf3e520",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0xf3e460"
+    ]
+  },
+  "CPicMorphShape": {
+    "create": 7822208,
+    "ctor": 7809136,
+    "vtable": 17169080,
+    "serialize": 18163176,
+    "slots": [
+      "0x7716f0",
+      "0x775e50",
+      "0x777e90",
+      "0x775870",
+      "0x11525e8",
+      "0x771720",
+      "0x775e70",
+      "0x7782c0"
+    ]
+  },
+  "CPicObj": {
+    "create": 9450416,
+    "ctor": 9448336,
+    "vtable": 17326076,
+    "serialize": 9236128,
+    "slots": [
+      "0x8ff1e0",
+      "0x902c50",
+      "0x902d70",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x902c70"
+    ]
+  },
+  "CPicOle": {
+    "create": 9494688,
+    "ctor": 9492000,
+    "vtable": 17327460,
+    "serialize": 9236128,
+    "slots": [
+      "0x90d5f0",
+      "0x90e1c0",
+      "0x90e1e0",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x90d740",
+      "0x90d760"
+    ]
+  },
+  "CPicPage": {
+    "create": 9462464,
+    "ctor": 9460688,
+    "vtable": 17326396,
+    "serialize": 9236128,
+    "slots": [
+      "0x903e00",
+      "0x905ca0",
+      "0x905cc0",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x903ec0"
+    ]
+  },
+  "CPicScreen": {
+    "create": 9498592,
+    "ctor": 9498176,
+    "vtable": 17328124,
+    "serialize": 9514128,
+    "slots": [
+      "0x90e5e0",
+      "0x90f040",
+      "0x90f560",
+      "0x914890",
+      "0x912c90",
+      "0x9132e0",
+      "0x9148d0",
+      "0x90e610"
+    ]
+  },
+  "CPicShape": {
+    "create": 9505888,
+    "ctor": 9501088,
+    "vtable": 17328468,
+    "serialize": 9236128,
+    "slots": [
+      "0x90f860",
+      "0x910e20",
+      "0x910e40",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x90fad0"
+    ]
+  },
+  "CPicShapeObj": {
+    "create": 9512000,
+    "ctor": 9536576,
+    "vtable": 17329540,
+    "serialize": 9236128,
+    "slots": [
+      "0x914030",
+      "0x9167e0",
+      "0x916800",
+      "0x914890",
+      "0x8ceea0",
+      "0x903c40",
+      "0x9148d0",
+      "0x914140"
+    ]
+  },
+  "CPicSoundCreator": {
+    "create": 9484272,
+    "ctor": 9448336,
+    "vtable": 17326076,
+    "serialize": 9236128,
+    "slots": [
+      "0x8ff1e0",
+      "0x902c50",
+      "0x902d70",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x902c70"
+    ]
+  },
+  "CPicSprite": {
+    "create": 9515248,
+    "ctor": 9512608,
+    "vtable": 17329428,
+    "serialize": 9518384,
+    "slots": [
+      "0x9130d0",
+      "0x8e99c0",
+      "0x1159e9c",
+      "0x913800",
+      "0x913d30",
+      "0x63695043",
+      "0x626d7953",
+      "0x6c6f"
+    ]
+  },
+  "CPicSwf": {
+    "create": 9486944,
+    "ctor": 9484992,
+    "vtable": 17327296,
+    "serialize": 9490400,
+    "slots": [
+      "0x90c240",
+      "0x8e99c0",
+      "0x1159a40",
+      "0x90c7f0",
+      "0x90cfe0",
+      "0x69004c",
+      "0x650076",
+      "0x720050"
+    ]
+  },
+  "CPicSymbol": {
+    "create": 9536896,
+    "ctor": 9536576,
+    "vtable": 17329540,
+    "serialize": 9236128,
+    "slots": [
+      "0x914030",
+      "0x9167e0",
+      "0x916800",
+      "0x914890",
+      "0x8ceea0",
+      "0x903c40",
+      "0x9148d0",
+      "0x914140"
+    ]
+  },
+  "CPicTempClipboardObj": {
+    "create": 9497648,
+    "ctor": 9496720,
+    "vtable": 17327812,
+    "serialize": 9236128,
+    "slots": [
+      "0x90e860",
+      "0x90ed50",
+      "0x90ed80",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x902c70"
+    ]
+  },
+  "CPicText": {
+    "create": 9611552,
+    "ctor": 9605936,
+    "vtable": 17331032,
+    "serialize": 9561840,
+    "slots": [
+      "0x91e700",
+      "0x91e2f0",
+      "0x91e960",
+      "0x115a0c0",
+      "0x91e6f0",
+      "0x919740",
+      "0x902d30",
+      "0x91ea80"
+    ]
+  },
+  "CPicVideo": {
+    "create": 9613600,
+    "ctor": 9612224,
+    "vtable": 17331684,
+    "serialize": 9236128,
+    "slots": [
+      "0x92ab90",
+      "0x92bbf0",
+      "0x92b370",
+      "0x92af70",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x92ac90"
+    ]
+  },
+  "CPicVideoStream": {
+    "create": 9624576,
+    "ctor": 9623472,
+    "vtable": 17332044,
+    "serialize": 9236128,
+    "slots": [
+      "0x92c1f0",
+      "0x92d620",
+      "0x92d8c0",
+      "0x8cee90",
+      "0x8ceea0",
+      "0x903c40",
+      "0x903d70",
+      "0x92c230"
+    ]
+  }
+}

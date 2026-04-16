@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fla-decoder"
+version = "0.1.0"
+description = "Open-source decoder for pre-CS5 binary Adobe Flash .fla files"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Ed Moore" },
+]
+keywords = ["flash", "fla", "swf", "decompiler", "ole2", "mfc"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Software Development :: Disassemblers",
+]
+dependencies = [
+  "olefile>=0.46",
+]
+
+[project.optional-dependencies]
+research = [
+  "pefile>=2023.2.7",
+  "capstone>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/eddiemoore/fla-decoder"
+Issues = "https://github.com/eddiemoore/fla-decoder/issues"
+
+[tool.setuptools]
+packages = ["fla_decoder"]

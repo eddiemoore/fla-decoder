@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local outputs
+output/
+out/
+extracted/
+*.svg
+*.png
+*.wav
+*.mp3
+*.fla
+*.swf
+!docs/**/*.png
+!docs/**/*.svg
+
+# Don't commit a real flash.exe
+flash.exe
+*.exe

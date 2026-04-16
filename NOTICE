@@ -1,0 +1,51 @@
+fla-decoder
+Copyright (c) 2026 Ed Moore
+Licensed under the MIT License (see LICENSE).
+
+This project is an independently-developed reverse-engineering of the
+pre-CS5 Adobe Flash binary FLA file format, created for interoperability
+purposes. No Adobe source code or binaries are included or redistributed
+in this repository. Contributors who wish to extend the decoder must
+obtain their own copy of any reference binaries (e.g. `flash.exe`).
+
+Trademarks
+----------
+"Adobe", "Flash", "Macromedia", and "Flash Professional" are trademarks
+of Adobe Inc. They appear in this repository nominatively to describe
+the file format being decoded. This project is not affiliated with,
+endorsed by, or sponsored by Adobe Inc.
+
+Prior art and credits
+---------------------
+- JPEXS Free Flash Decompiler
+  https://github.com/jindrapetrik/jpexs-decompiler
+  Invaluable reference for the LosslessImageBinDataReader and overall
+  SWF/FLA format knowledge.
+
+- Ruffle
+  https://github.com/ruffle-rs/ruffle
+  Open-source SWF runtime. Its shape rendering helped sanity-check
+  coordinate units.
+
+- fla-viewer
+  https://github.com/lifeart/fla-viewer
+  Handles the post-CS5 XFL/zip format (different from this project's
+  scope, but cited for context).
+
+The Ghidra-driven disassembly that enabled this decoder was performed
+with the assistance of Claude Code (Anthropic).
+
+Legal basis for reverse engineering
+-----------------------------------
+Reverse engineering for interoperability is recognized as protected
+activity under, among others:
+
+  - DMCA §1201(f) (United States, 17 U.S.C. §1201(f))
+  - EU Software Directive 2009/24/EC, Article 6 (European Union)
+  - Sega Enterprises Ltd. v. Accolade, Inc., 977 F.2d 1510 (9th Cir. 1992)
+  - Sony Computer Entertainment, Inc. v. Connectix Corp., 203 F.3d 596
+    (9th Cir. 2000)
+  - Google LLC v. Oracle America, Inc., 593 U.S. ___ (2021)
+
+This NOTICE is not legal advice. The MIT license's "as is, no warranty"
+terms apply.
