@@ -429,13 +429,25 @@ def _read_mfc_cstring(r: Reader) -> str:
     return r.bytes(ln * 2).decode('utf-16le', 'replace')
 
 def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
-    """CPicText : CPicObj. Reads the CPicObj base, then text-specific fields:
-       text_schema (u8), 6-element matrix, bounding rect (4 × s32 twips),
-       font name, font size, and text content.
+    """CPicText : CPicObj. Reads the CPicObj base, then text-specific fields.
 
-       We don't have a complete field map for CPicText (no Ghidra disassembly
-       of 0x0091e6f0 yet), so we extract what we can and scan for the font
-       name and text content by pattern.
+       Decompiled from CPicText::Serialize at primary vtable slot 2
+       (VA 0x00929800 in flash.exe, loading path at 0x929cf4):
+         CPicObj::Serialize(archive)
+         u8  text_schema
+         24B matrix at this+0x80                    (read_matrix_6 via 0xf2c400)
+         16B bounds at this+0x98                    (4 × s32 via 0xf2c760)
+         u8  field_c8
+         if text_schema >= 3:  u8 extra (local, not stored)
+         if text_schema >= 5:  u32 field_120 (else u16 if >= 4)
+         if text_schema >= 4:  u16 field_124
+         if text_schema >= 4:  FUN_920900 → CString field_128 (font, if schema >= 10)
+         FUN_9295c0 (internal state only, no archive reads)
+         if text_schema >= 6:  FUN_920900 → CString field_134 (font, if schema >= 10)
+         if text_schema >= 9:  FUN_937590 sub-object at field_74
+         if text_schema >= 8:  u32 field_10c
+       Font name is extracted by pattern scanning since the exact CString
+       byte alignment between field_128 and field_134 is ambiguous.
     """
     out = read_cpicobj_fields(r, ar)
     try:
@@ -445,40 +457,34 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
             'left': r.s32(), 'right': r.s32(),
             'top': r.s32(), 'bottom': r.s32(),
         }
-        # Remaining text-specific fields: font, size, content, alignment,
-        # color, etc. We don't know the exact layout, so scan for the font
-        # name (u8 charlen + UTF-16LE chars) and ff-fe-ff strings.
-        text_body_start = r.pos
-        text_body = r.buf[r.pos:]
-        strings_found = []
+        out['text_field_c8'] = r.u8()
+        ts = out['text_schema']
+        if ts >= 3:
+            r.u8()  # extra byte (consumed but not stored)
+        if ts >= 5:
+            out['text_field_120'] = r.u32()
+        elif ts >= 4:
+            out['text_field_120'] = r.u16()
+        if ts >= 4:
+            out['text_field_124'] = r.u16()
+        # Font name: scan remaining bytes for u8-length + UTF-16LE pattern
+        # since exact CString alignment depends on the font reader chain
+        scan_start = r.pos
+        scan_buf = r.buf[scan_start:]
         font_name = None
         font_size = None
-        # Scan for MFC-style u8-length UTF-16 strings (font names)
         i = 0
-        while i < len(text_body) - 4:
-            # ff fe ff NN = Flash-style string
-            if text_body[i:i+3] == b'\xff\xfe\xff':
-                ln = text_body[i+3]
-                end = i + 4 + ln * 2
-                if end <= len(text_body):
-                    s = text_body[i+4:end].decode('utf-16le', 'replace')
-                    strings_found.append(s)
-                i = max(i + 1, end) if end <= len(text_body) else i + 1
-                continue
-            # Look for u8 charlen followed by plausible UTF-16 text (ASCII range)
-            ln = text_body[i]
-            if 4 <= ln <= 40 and i + 1 + ln * 2 <= len(text_body):
-                candidate = text_body[i+1:i+1+ln*2]
+        while i < len(scan_buf) - 4:
+            ln = scan_buf[i]
+            if 4 <= ln <= 40 and i + 1 + ln * 2 <= len(scan_buf):
+                candidate = scan_buf[i+1:i+1+ln*2]
                 try:
                     s = candidate.decode('utf-16le')
                     if all(0x20 <= ord(c) < 0x7F for c in s) and any(c.isalpha() for c in s):
                         if font_name is None:
                             font_name = s
-                            # Font size is the u16 right before the length byte
                             if i >= 2:
-                                font_size = struct.unpack_from('<H', text_body, i - 2)[0]
-                        else:
-                            strings_found.append(s)
+                                font_size = struct.unpack_from('<H', scan_buf, i - 2)[0]
                         i += 1 + ln * 2
                         continue
                 except (UnicodeDecodeError, ValueError):
@@ -488,12 +494,6 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
             out['text_font_name'] = font_name
         if font_size:
             out['text_font_size_twips'] = font_size
-        if strings_found:
-            out['text_strings'] = strings_found
-        # Skip to the end of the text body. We can't precisely determine
-        # where CPicText ends, so we DON'T advance r.pos here. The parent's
-        # CPicObj children loop will hit an error and the recovery scanner
-        # handles the rest.
     except EOFReader as e:
         out['_text_truncated'] = str(e)
     return out
