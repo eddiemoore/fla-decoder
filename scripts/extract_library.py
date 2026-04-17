@@ -164,9 +164,24 @@ def process_fla(fla_path: str) -> dict:
         contents = ole.openstream('Contents').read()
         result['library'] = extract_library_table(contents)
         result['publish_settings'] = extract_publish_settings(contents)
+        folders = set()
+        fpos = 0
+        while fpos < len(contents) - 4:
+            if contents[fpos:fpos + 3] == b'\xff\xfe\xff':
+                fln = contents[fpos + 3]
+                fend = fpos + 4 + fln * 2
+                if fln > 0 and fend <= len(contents):
+                    fs = contents[fpos + 4:fend].decode('utf-16le', 'replace')
+                    if fs.startswith('Folder '):
+                        folders.add(fs[7:])
+                fpos = fend
+            else:
+                fpos += 1
+        result['folders'] = sorted(folders)
     else:
         result['library'] = {}
         result['publish_settings'] = {}
+        result['folders'] = []
 
     streams = sorted(int(s[0].split()[1])
                      for s in ole.listdir(streams=True)
