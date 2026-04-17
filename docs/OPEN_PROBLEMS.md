@@ -74,25 +74,26 @@ symbols (e.g. one observed at 2.1 MB containing a fountain-scene
 preview) live here; getting CPicFrame schema 23 right would let us
 remove the recovery-scanner workaround.
 
-### 2. CPicSprite (no implementation at all)
+### 2. CPicSprite timeline sub-objects (partially decoded)
 
-`Serialize VA = 0x00913d30`. CPicSprite is the movie-clip / animation
-state machine: it owns layers, frame-by-frame keyframe data, sound sync,
-ActionScript hooks. About 36 of the unrendered symbols in our test
-corpus are CPicSprite-only.
+CPicSprite::Serialize at primary vtable slot 2 (VA `0x00913d80`) has
+been disassembled. The decoder now reads: CPicObj base, CPicSymbol fields
+(symbol_schema, matrix, field_b0, field_cc), sprite_schema, and extracts
+frame labels + AS2 scripts by string scanning.
 
-`fla_decoder/decoder.py` doesn't even attempt this class — the structured
-parser walks past it via the generic `read_cpicobj_fields` and finds no
-shapes inside. We rely entirely on the recovery scanner to dig shapes
-back out of the bytes.
+What's still missing is the structured frame/layer data inside the
+sub-objects. The key function is `FUN_008facd0` (timeline at `this+0xf4`)
+which reads: `u32 count`, `u32 type`, then a loop of `u32 frame_entry_id`
+values dispatched by type (0=array, 1=tree insertion, 2=CString).
 
-**Next step:** decompile `0x00913d30` and translate. Likely fields:
-- Frame array (per-frame layer state)
-- Layer array (each layer has its own frame stream)
-- Tween descriptors (linear, ease, motion-guide)
-- Sound sync mode + start sample
-- AS2 frame scripts (already extractable as raw strings via
-  `scripts/audit.py`)
+Empirically, the per-frame blocks are 130 bytes each with: a near-
+identity matrix, a u32 reference ID (incrementing), and a frame index.
+These look like placement records ("put symbol X at transform Y on
+frame N").
+
+**Next step:** finish disassembling `0x008facd0`'s loading path and
+`0x00913bc0` (frame layout helper) to map the 130-byte frame blocks
+precisely. Then implement structured frame extraction in the decoder.
 
 ### 3. CPicLayer / CPicPage tail fields
 
@@ -109,12 +110,17 @@ CPicPage is the scene; likely has a name, frame count, scene order.
 These are small/cheap to decode and would massively improve the audit
 output (you'd know which symbols are masks vs guides).
 
-### 4. CPicText body
+### 4. CPicText body (partially decoded)
 
-`Serialize VA = 0x0091e6f0`. ~7 unrendered symbols are CPicText.
-Decoding would let us recover dynamic text fields (font, size,
-alignment, default text) — useful for any port that needs to recreate
-UI labels.
+CPicText::Serialize at primary vtable slot 2 is VA `0x0091e960`.
+The decoder now reads: CPicObj base, text_schema, matrix, bounding rect
+(4 × s32 twips), and extracts font name + font size by pattern scanning.
+
+Still unknown: the exact field layout between the bounds and the font
+name (there are some u16/u32 fields and an empty string), the text
+content encoding (inline UTF-16 without a standard length prefix), and
+text alignment / color / embedding flags. Disassembling `0x0091e960`
+would nail all of these.
 
 ### 5. CPicMorphShape
 
@@ -147,20 +153,84 @@ class-specific writer).
 
 ## Useful Ghidra anchors (from prior RE)
 
+**IMPORTANT: vtable slot 4 is NOT the real Serialize.** Slot 4 for
+CPicObj is `ret 8` (no-op). The actual serialization is at **slot 2
+of the PRIMARY vtable**. CPicSprite has multiple inheritance and 5
+vtable pointers; `serialize_vas.json` has the secondary vtable
+(at `this+0xf4`), not the primary.
+
+### Primary vtable slot 2 (the REAL Serialize for each class)
+
+| Class | Primary vtable | Slot 2 (Serialize) | Notes |
+|---|---|---|---|
+| `CPicObj` | `0x01085ffc` | `0x00902d70` | Base: schema, flags, children loop, point |
+| `CPicShape` | `0x01086954` | `0x00910e40` | CPicObj base + shape_schema + matrix + shape_data |
+| `CPicFrame` | `0x01085d4c` | `0x008fdb80` | CPicShape base + frame tail (documented) |
+| `CPicSymbol` | `0x01086d84` | `0x00916800` | CPicObj base + symbol_schema + matrix + u16s + CString name + frame data |
+| `CPicSprite` | `0x01086c1c` | `0x00913d80` | CPicSymbol base + sprite_schema + timeline sub-objects |
+| `CPicText` | `0x01087358` | `0x0091e960` | CPicObj base + text fields (partially decoded) |
+
+### CPicSymbol::Serialize call map (VA 0x00916800)
+
+```
+CPicObj::Serialize(archive)          → 0x00902d70
+u8  symbol_schema                    (via schema lookup table at 0x12b9570)
+24B matrix at this+0x78              → 0x00f2c2b0 (read_matrix_6)
+u16 field_b0
+u16 field_cc
+FUN_009024f0(archive, &field_90)     — struct: u8 marker + series of u16 fields
+FUN_00916540(archive, schema, &field_f0) — CString (symbol name) via 0x4710e0
+conditional: u32 field_d0 or field_74 (media/sound ref)
+if symbol_schema < 10: extended handling via FUN_00916540 again
+```
+
+### CPicSprite::Serialize call map (VA 0x00913d80)
+
+```
+CPicSymbol::Serialize(archive)       → 0x00916800
+u8  sprite_schema                    (read directly from stream)
+if sprite_schema >= 2:
+    FUN_008facd0(archive, &field_f4)  — TIMELINE DATA: reads u32 count + u32 type,
+                                        then loops reading u32 frame IDs with
+                                        type-dependent payloads (tree/list insertion)
+FUN_00913bc0(archive, sprite_schema, &field_160)  — frame layout helper
+if sprite_schema >= 3:
+    FUN_005c5b00(archive, &field_164)
+if sprite_schema >= schema_level_6:
+    FUN_00937590(&field_150, archive, mode)
+if sprite_schema >= 5:
+    u32 → field_190
+if sprite_schema >= 8:
+    FUN_005d4790(&field_15c, archive)
+```
+
+### Sub-function VAs still needing disassembly
+
+| VA | Called from | Purpose |
+|---|---|---|
+| `0x008facd0` | CPicSprite slot 2 | Timeline sub-object at this+0xf4 (partially decoded) |
+| `0x00913bc0` | CPicSprite slot 2 | Frame layout at this+0x160 |
+| `0x009024f0` | CPicSymbol slot 2 | field_90 struct (u8 + u16 array) |
+| `0x005c5b00` | CPicSprite slot 2 | Sub-object at this+0x164 |
+| `0x00937590` | CPicSprite slot 2 | Sub-object at this+0x150 |
+| `0x005d4790` | CPicSprite slot 2 | Sub-object at this+0x15c |
+| `0x0091e960` | CPicText slot 2 | Text body (font, size, content, alignment) |
+
+### Other anchors
+
 | What | VA | Notes |
 |---|---|---|
 | `CArchive::ReadObject` | `0x00ee3e6c` | The Rosetta Stone — shows the class-tag protocol |
-| `CPicObj::Serialize` | `0x008ceea0` | Shared by CPicShape / CPicLayer / CPicPage / CPicFrame / CPicBitmap |
-| `CPicSprite::Serialize` | `0x00913d30` | Class-specific (timeline) |
-| `CPicText::Serialize` | `0x0091e6f0` | Class-specific (text fields) |
-| `CPicMorphShape::Serialize` | `0x011525e8` | Class-specific (shape tweens) |
-| `FUN_008fdb80` | — | CPicFrame's actual tail-reading helper |
+| `FUN_008fdb80` | — | CPicFrame's actual tail-reading helper (= CPicFrame slot 2) |
 | `FUN_00f3c430` | — | Fill-style reader; takes `caps_flag = shape_schema > 2` |
+| `0x008f3f70` | — | Read u8 from archive (used in saving path) |
+| `0x0040a820` | — | Read u32 from archive |
+| `0x004710e0` | — | Read CString from archive (used for field_f0 symbol name) |
 
 `research/data/runtime_classes.json` has all 46 CRuntimeClass entries
 with sizes/schemas/base-class pointers. `research/data/serialize_vas.json`
-has the Serialize VA per class, plus the vtable VA in case you need to
-walk other slots.
+has Serialize VAs per class (**note: these are from the SECONDARY vtable
+for CPicSprite, not the primary — see above**).
 
 ---
 
