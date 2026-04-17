@@ -251,3 +251,52 @@ Look for:
 The recovery scanner currently masks failures — if you finish CPicFrame
 schema 23 properly, the `recovered` count in `_summary.json` should
 drop substantially while `ok` stays flat.
+
+---
+
+## Timeline composition: what we know now
+
+### Per-frame data structure (FUN_498020 at 0x498020)
+
+The per-frame reader is called from FUN_008facd0 (type=0 path) for
+each frame in the timeline. It reads:
+
+```
+u32  schema/version
+u32  entry_count
+per entry:
+    u32  char_id  (index into global table at 0x13c2b68)
+    [object.Serialize() — variable-length, depends on object type]
+```
+
+After FUN_498020 returns, FUN_008facd0 reads the frame's strings:
+- CString frame_label (via FUN_8f9290)
+- CString instance_name
+- CString action_script
+
+### char_id resolution
+
+The `char_id` is a direct array index into a global table at
+`0x13c2b68`. The lookup: `table[char_id]` → CPic* object pointer.
+The table is populated during symbol deserialization through virtual
+dispatch (FUN_494310 creates wrapper objects, vtable+0x38 returns
+the char_id, vtable+0x58=Clone, vtable+0x68=Serialize).
+
+The char_id values are internal Flash editor IDs — they don't appear
+as explicit fields in the binary. The mapping is runtime-computed.
+For practical purposes, frame labels map to library names by naming
+convention (this was verified to work across the test corpus).
+
+### Extraction results
+
+3,493 keyframes extracted across 7 FLAs (9 total, 2 empty).
+Each keyframe has: label, char_id, depth, instance_name, script.
+
+### VAs for further work
+
+| VA | Function | Purpose |
+|---|---|---|
+| `0x00498020` | FUN_498020 | Per-frame data reader |
+| `0x00482c10` | FUN_482c10 | Per-frame data writer (saving only) |
+| `0x00494310` | FUN_494310 | Global table init + char_id registration |
+| `0x13c2b68` | — | Global char_id → CPic* lookup table |
