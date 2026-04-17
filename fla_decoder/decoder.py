@@ -872,6 +872,10 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
         res = _try_parse_shape_at(data, body_start, tmp_ar, min_edges=1)
         if res is None: continue
         shape, end_pos = res
+        # Cap taken region to prevent one shape from blocking the entire stream.
+        # A single CPicShape body is rarely > 50KB; inflated end_pos comes from
+        # the end-marker scan in child deserializers.
+        capped_end = min(end_pos, body_start + 50000)
         found.append({
             'class': 'CPicShape',
             '_recovered_at': body_start,
@@ -879,7 +883,7 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
             '_recovered_via': 'class_decl',
             **shape,
         })
-        taken_regions.append((body_start, end_pos))
+        taken_regions.append((body_start, capped_end))
 
     # ─── 2) signature-based recovery ──────────────────────────────────
     pos = start
@@ -896,6 +900,7 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
             res = _try_parse_shape_at(data, body_start, ar, min_edges=3)
             if res is None: continue
             shape, end_pos = res
+            capped_end = min(end_pos, body_start + 50000)
             found.append({
                 'class': 'CPicShape',
                 '_recovered_at': body_start,
@@ -903,8 +908,8 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
                 '_recovered_via': f'sig_offset_{offset}',
                 **shape,
             })
-            taken_regions.append((body_start, end_pos))
-            pos = end_pos
+            taken_regions.append((body_start, capped_end))
+            pos = capped_end
             break
     return found
 
