@@ -112,6 +112,19 @@ def extract_all(fla_path: str) -> dict:
                 settings['stage_height'] = int(val)
         result['publish_settings'] = settings
 
+        # Extract background color and frame rate from binary pattern:
+        # RGBA(4B) + RGBA(4B) + u16(0) + u16(fps)
+        for ci in range(100, len(contents) - 14):
+            a1 = contents[ci + 3]
+            a2 = contents[ci + 7]
+            pad = struct.unpack_from('<H', contents, ci + 8)[0]
+            fps = struct.unpack_from('<H', contents, ci + 10)[0]
+            if a1 == 0xFF and a2 == 0xFF and pad == 0 and 10 <= fps <= 60:
+                r, g, b = contents[ci], contents[ci + 1], contents[ci + 2]
+                result['background_color'] = f'#{r:02x}{g:02x}{b:02x}'
+                result['frame_rate'] = fps
+                break
+
     # ── Symbol streams ───────────────────────────────────────────────
     streams = sorted(int(s[0].split()[1])
                      for s in ole.listdir(streams=True)
