@@ -20,12 +20,21 @@ from fla_decoder import decoder, to_svg
 def process_fla(fla_path: str, out_dir: str) -> dict:
     os.makedirs(out_dir, exist_ok=True)
     ole = olefile.OleFileIO(fla_path)
-    streams = sorted([int(s[0].split()[1])
-                      for s in ole.listdir(streams=True)
-                      if s[0].startswith('Symbol ')])
+    # Support both Flash 8 naming ("Symbol N") and CS3/CS4 naming ("S N timestamp")
+    stream_map = {}
+    for s in ole.listdir(streams=True):
+        name = s[0]
+        if name.startswith('Symbol '):
+            stream_map[int(name.split()[1])] = name
+        elif name.startswith('S ') and len(name.split()) >= 2:
+            try:
+                stream_map[int(name.split()[1])] = name
+            except ValueError:
+                pass
+    streams = sorted(stream_map.keys())
     counts = Counter(); rendered = []
     for sid in streams:
-        data = ole.openstream(f'Symbol {sid}').read()
+        data = ole.openstream(stream_map[sid]).read()
         try:
             result = decoder.decode_symbol_stream(data)
             shapes = to_svg.find_nonempty_shapes_in_result(result)
