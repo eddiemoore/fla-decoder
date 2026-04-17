@@ -336,3 +336,31 @@ Stored as `<AnimationCore>` XML in Page/Symbol streams:
 that uses the 3D Rotation or 3D Translation tools. The data likely
 appears as Rotation_X, Rotation_Y, Translation_Z properties in the
 AnimationCore XML, or as additional matrix fields.
+
+### CDocumentPage fields (investigated)
+
+CDocumentPage::Serialize at primary vtable slot 2 (VA `0x008c9af0`,
+loading path at `0x008ca190`). Schema value is 23 (Flash 8) or 25 (CS4).
+
+**Confirmed layout:**
+```
+u8  doc_schema
+FUN_8c7550 → CString page_name    (threshold at [0x12b4b78]=21)
+FUN_8c9940 → CString scene_name   (conditional CString reader)
+if doc_schema >= 2: u32 → field_19c (via 0x4c9350)
+if doc_schema >= 3 and < 4: u8 → field_19a (bool)
+if doc_schema >= 4: bool → field_19a (via 0x5af0a0)
+if doc_schema >= 6: FUN_8c9940 → field_1e0 (CString)
+if doc_schema >= 7: u32 → field_1e4 (via 0x40a820)
+if doc_schema >= 5: FUN_8781c0 → field_1c (complex)
+if doc_schema >= 8: FUN_ecc6b1 → field_21c
+if doc_schema == 9: 4x FUN_8fd980 (timeline data)
+if doc_schema >= 10: complex extended handling
+```
+
+**Not found:** Frame rate and background color. All 9 test FLAs have
+identical binary values in the numeric fields after the strings,
+suggesting these are format constants, not per-document settings.
+The frame rate may be a Flash IDE default (12fps) that's only written
+to the SWF at export time, not stored in the FLA binary. Or it may
+be in a schema >= 9 field that requires more Ghidra work.
