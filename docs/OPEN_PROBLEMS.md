@@ -304,3 +304,35 @@ switch to XFL/zip in CS5 (2010):
 All 9 FLAs in the current test corpus target **Flash Player 7** with
 **ActionScript 2** — they're pure Flash 8 era and don't use any CS3/CS4
 features. The decoder handles them at 100% shape coverage.
+
+### CS4 format findings (verified)
+
+Two CS4 binary FLAs were successfully decoded with the existing parser.
+Shape extraction works unchanged — the MFC CPic* class protocol is
+identical between Flash 8 and CS4.
+
+**Stream naming difference:** CS4 uses `S N timestamp`, `P N timestamp`,
+`M N timestamp` instead of `Symbol N`, `Page N`, `Media N`. The timestamp
+is a Unix epoch (seconds since 1970). `scripts/decode.py` handles both.
+
+**IK Bone data (from shape-ik-rubberman-animation.fla):**
+Stored as embedded XML strings in Page and Contents streams:
+- `<BridgeTree>` — armature definition (name, color, exportType)
+- `<nodes>` — bone hierarchy (parent-child tree of 21 nodes)
+- `<Matrix a b c d tx ty Name>` — per-bone transform (rotation/position)
+- `<_ikTreeStates>` — animation states (10 states, 80 frames)
+- `ikNode_N` / `ikBoneName_N` — comma-separated name mappings
+
+**Object-based motion tweens (from flash-cs-4-motion-tweening-adjusted.fla):**
+Stored as `<AnimationCore>` XML in Page/Symbol streams:
+- TimeScale (fps × 1000), duration (ms), TimeMap (easing type/strength)
+- Per-property bezier keyframe tracks:
+  - Motion_X, Motion_Y, Rotation_Z
+  - Scale_X, Scale_Y, Skew_X, Skew_Y
+  - Brightness_Amount, Filters
+- Each keyframe: anchor point + next/previous cubic handles + timevalue
+
+**3D transforms:** Not found in test fixtures. Would need a CS4 FLA
+that uses the 3D Rotation or 3D Translation tools. The data likely
+appears as Rotation_X, Rotation_Y, Translation_Z properties in the
+AnimationCore XML, or as additional matrix fields.
