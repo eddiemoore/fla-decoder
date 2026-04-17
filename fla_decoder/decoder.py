@@ -509,28 +509,63 @@ def read_morph_subobject(r: Reader, ar: ArchiveReader) -> dict:
        as sequences of s32 coordinate pairs in twips (1/20 pixel)."""
     out = {}
     start = r.pos
-    # Extract coordinate pairs (s32 x, s32 y) from the body
-    coords = []
+    # Morph sub-objects have a small header (typically 16 bytes: 2 u32 fields
+    # + 2 s32 sentinels) before the coordinate data.
+    # Skip header bytes that are 0x00 or 0xFF runs.
+    try:
+        while r.remaining() >= 4:
+            peek = struct.unpack_from('<I', r.buf, r.pos)[0]
+            if peek == 0 or peek == 0xFFFFFFFF:
+                r.pos += 4
+            else:
+                break
+    except EOFReader:
+        pass
+    # Extract coordinate pairs (s32 x, s32 y) in twips (1/20 pixel).
+    # Morph curves store groups of control points separated by u32=0 + u8 count.
+    all_coords = []
     try:
         while r.remaining() >= 8:
-            # Check for class tags that would end this object
+            # Check for class tags (NEWCLASS or backref) that end this object
             if r.remaining() >= 2:
                 peek = struct.unpack_from('<H', r.buf, r.pos)[0]
-                if peek == 0xFFFF or peek == 0x0000:
+                if peek == 0xFFFF:
                     break
                 if peek & 0x8000 and (peek & 0x7FFF) <= len(ar.classes):
+                    break
+            # Check for separator: u32=0 followed by non-coordinate data
+            if r.remaining() >= 6:
+                peek4 = struct.unpack_from('<I', r.buf, r.pos)[0]
+                if peek4 == 0:
+                    r.pos += 4
+                    if r.remaining() >= 1:
+                        r.u8()
+                    continue
+            # Peek ahead: if a valid NEWCLASS declaration (ff ff 01 00 NN 00 + ASCII)
+            # appears within next 8 bytes, stop to let the parent read it
+            if r.remaining() >= 12:
+                stop = False
+                for off in range(0, 6, 2):
+                    p = r.pos + off
+                    if (r.buf[p] == 0xFF and r.buf[p+1] == 0xFF
+                            and r.buf[p+2] == 0x01 and r.buf[p+3] == 0x00
+                            and r.buf[p+5] == 0x00
+                            and 0x41 <= r.buf[p+6] <= 0x5A):  # ASCII uppercase
+                        stop = True
+                        break
+                if stop:
                     break
             x = r.s32()
             y = r.s32()
             if abs(x) < 10000000 and abs(y) < 10000000:
-                coords.append({'x': x, 'y': y, 'px_x': x / 20.0, 'px_y': y / 20.0})
+                all_coords.append({'x': x, 'y': y, 'px_x': x / 20.0, 'px_y': y / 20.0})
             else:
-                r.pos -= 8  # put back
+                r.pos -= 8
                 break
     except EOFReader:
         pass
-    if coords:
-        out['coords'] = coords
+    if all_coords:
+        out['coords'] = all_coords
     out['_bytes_consumed'] = r.pos - start
     return out
 
@@ -561,9 +596,18 @@ def read_cpicmorphshape(r: Reader, ar: ArchiveReader) -> dict:
         r.bytes(7)  # skip padding/extra fields
         out['morph_segment_count'] = r.u8()
         r.u8()  # skip padding byte before class tags
-        # Read embedded morph sub-objects via class tags
+        # Read embedded morph sub-objects via class tags.
+        # Between sub-objects there can be 1-2 byte spacers; skip non-tag bytes.
         children = []
         while r.remaining() >= 2:
+            # Skip spacer bytes until we find a valid class tag
+            while r.remaining() >= 2:
+                peek = struct.unpack_from('<H', r.buf, r.pos)[0]
+                if peek == 0xFFFF or peek == 0x0000:
+                    break
+                if (peek & 0x8000) and (peek & 0x7FFF) <= len(ar.classes):
+                    break
+                r.pos += 1
             try:
                 tag = ar.read_class_tag()
             except (ValueError, EOFReader):
