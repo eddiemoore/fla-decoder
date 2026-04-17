@@ -1,15 +1,15 @@
-# Binary FLA (pre-CS5) — Complete format notes
+# Binary FLA (Flash 5 through CS6) — Complete format notes
 
-Comprehensive, continuously-updated reference for the pre-CS5 Adobe Flash
-authoring document (`.fla`) binary format — the OLE2 compound-document variant
-used by Flash 5 / MX / MX 2004 / 8 / CS3 / CS4 (not the XFL zip/xml format
-introduced in CS5+).
+Comprehensive, continuously-updated reference for the binary Adobe Flash
+authoring document (`.fla`) format — the OLE2 compound-document variant
+used by Flash 5 / MX / MX 2004 / 8 / CS3 / CS4 / CS5 / CS6 (not the
+XFL zip/xml format also available from CS5+).
 
 This is the product of reverse engineering Flash 8's `flash.exe` with
 Ghidra + olefile + capstone, resulting in a working Python decoder
 (`fla_decoder/decoder.py`) that renders 96% of symbols (806/841) and
-recovers 100% of shapes (31,168 shapes / 16.3M edges) across a
-representative test corpus of nine FLAs.
+recovers 100% of shapes (31,168 shapes / 16.3M edges) across a test
+corpus of 17 FLAs spanning Flash 5 through CS6.
 
 > Most of the format was **undocumented anywhere public** — even JPEXS
 > Free Flash Decompiler cannot read binary FLA. The format below was

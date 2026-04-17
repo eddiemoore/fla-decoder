@@ -1,29 +1,48 @@
 # fla-decoder
 
-An open-source decoder for **pre-CS5 binary `.fla`** files (Flash MX through
-Flash CS4). These files are Microsoft OLE2 compound documents containing
+An open-source decoder for **binary `.fla`** files (Flash 5 through CS6,
+2000-2012). These files are Microsoft OLE2 compound documents containing
 MFC-serialized object trees — a format that was never publicly documented
 and which existing tools (JPEXS, Ruffle, etc.) can read *out* of (when
 exporting from `.swf`) but not *in* to.
 
 This project reverse-engineers that format by disassembling Flash 8's
-`flash.exe` and reimplements enough of MFC's `CArchive` protocol to walk
-the object tree, decode shape geometry, and recover artwork as SVG.
-
-It also extracts embedded audio (PCM/MP3) and bitmaps (JPEG/PNG and the
-custom chunked-zlib lossless format).
+`flash.exe` with Ghidra, reimplementing MFC's `CArchive` protocol to
+walk the object tree, and extracting all recoverable data: vector shapes,
+audio, bitmaps, text, scripts, timeline data, and document properties.
 
 ## Status
 
-On a 9-FLA test corpus (841 symbols total), about **95% of shapes** render
-correctly. The remaining ~5% are CPicSprite animation state machines and
-empty CPicText/CPicFrame containers, which contain no inline shape data —
-their text labels and ActionScript snippets are still recoverable via
-`scripts/audit.py`.
+Tested on 17 FLAs spanning Flash 5 through CS6:
 
-This is **not** a 100% solution. It's enough to recover artwork from FLA
-files when the original Flash IDE isn't available, but won't reconstruct
-timelines or symbol composition perfectly.
+- **100% shape coverage** — 31,168 shapes / 16.3M edges, zero missed
+- **96% symbol render rate** — 806/841 symbols rendered to SVG
+- **99.9% useful data** — 840/841 symbols have extracted content
+
+The remaining 35 unrendered symbols are movie-clip composition
+containers that reference shapes from other symbols — they contain
+no inline geometry but their frame labels, scripts, and metadata
+are fully extracted.
+
+### What's extracted
+
+| Data | Status |
+|------|--------|
+| Vector shapes (fills, gradients, transforms) | 100% coverage |
+| Audio (WAV/MP3) | Complete |
+| Bitmaps (JPEG/PNG/lossless) | Complete |
+| Background color + frame rate | Complete |
+| Stage dimensions | Complete |
+| Text content, font names, font sizes | Complete |
+| AS2 scripts (frame + clip events) | Complete |
+| Timeline keyframes with labels | Complete |
+| Symbol library (names, types, timestamps) | Complete |
+| Layer metadata (name, type, lock, visible, color) | Complete |
+| Publish settings (130+ per FLA) | Complete |
+| Library folder hierarchy | Complete |
+| Shape tweens (CPicMorphShape) | Complete |
+| CS4 IK bones (armature hierarchy + transforms) | Complete |
+| CS4 motion tweens (AnimationCore XML) | Complete |
 
 ## Install
 
@@ -49,25 +68,32 @@ python scripts/decode.py path/to/file.fla output_dir/
 python scripts/decode.py path/to/fla_dir/ output_dir/
 ```
 
+### Extract everything to JSON
+
+```bash
+python scripts/extract_all.py path/to/file.fla output.json
+```
+
+Outputs a single JSON with all extractable data: shapes, library table,
+publish settings, text content, scripts, timeline frames, layer metadata,
+background color, frame rate, IK bones, and motion tweens.
+
 ### Extract audio + bitmaps
 
 ```bash
 python scripts/extract_media.py path/to/file.fla output_dir/
 ```
 
-### Audit unrendered symbols
+### Extract library table + timeline
 
-Most "unrendered" symbols still have useful content (frame labels, AS
-scripts) — `audit.py` lists them:
+```bash
+python scripts/extract_library.py path/to/fla_dir/ library.json
+```
+
+### Audit unrendered symbols
 
 ```bash
 python scripts/audit.py path/to/fla_dir/ audit.json
-```
-
-### Inspect a single FLA's symbol inventory
-
-```bash
-python scripts/inspect.py path/to/file.fla output_dir/
 ```
 
 ### Programmatic API
@@ -86,28 +112,30 @@ to_svg.shape_to_svg(shapes[0], 'out.svg', apply_matrix=True, all_shapes=shapes)
 ## How it works
 
 The full reverse-engineering story is in [`this blog post`](https://eddiemoore.dev/blog/cracking-the-pre-cs5-binary-fla);
-the format spec we derived is in [`docs/FORMAT.md`](docs/FORMAT.md); the raw
-RE journey log is in [`docs/RE_JOURNEY.md`](docs/RE_JOURNEY.md). If you want
-to contribute, [`docs/OPEN_PROBLEMS.md`](docs/OPEN_PROBLEMS.md) lists what's
-still unfinished (timeline data, CPicSprite, CPicText body, etc.) and how
-to attack each one.
+the format spec is in [`docs/FORMAT.md`](docs/FORMAT.md); the raw
+RE journey log is in [`docs/RE_JOURNEY.md`](docs/RE_JOURNEY.md). For
+remaining gaps and Ghidra VAs, see
+[`docs/OPEN_PROBLEMS.md`](docs/OPEN_PROBLEMS.md).
 
 The TL;DR:
 
 1. The FLA is an OLE2 compound document with `Contents`, `Page N`, `Symbol N`,
-   and `Media N` streams.
+   and `Media N` streams (CS4+ uses `S N`/`P N`/`M N` + timestamp).
 2. Inside each stream, the bytes are an MFC `CArchive` serialization of an
    object tree (`CPicPage` → `CPicLayer` → `CPicFrame` → `CPicShape` → ...).
 3. MFC encodes class identity using "tags": `0xFFFF`+name for new classes,
-   `0x8000|idx` for back-references to previously-seen classes in the same
-   stream.
+   `0x8000|idx` for back-references.
 4. Each class's `Serialize` method writes its fields in a fixed order;
    we found those orderings by disassembling Flash 8's `flash.exe` in
-   Ghidra (the primary vtable's slot 4 is always `Serialize` for any
-   `CObject`-derived class).
+   Ghidra (slot 2 of the **primary vtable** is `Serialize` — not slot 4).
 5. Shape geometry uses a custom byte-encoded edge loop with four delta
    types (zero, s16, s32, and `s16 << 7`) and a "ultra-twip" coordinate
    unit where 1 pixel = 2560 units.
+6. CS4 adds IK bone data and motion tweens as embedded XML strings
+   (`<BridgeTree>`, `<AnimationCore>`) within the binary MFC stream.
+7. The `Contents` stream holds the document DOM: library table (symbol
+   names, types, timestamps), folder hierarchy, publish settings,
+   background color, frame rate, and color palette.
 
 ## Credits and prior art
 
@@ -149,7 +177,7 @@ have no DRM or technological protection measure, so DMCA §1201(a)
 anti-circumvention provisions don't apply.
 
 Adobe Flash was end-of-life as of December 31, 2020. This project exists
-to make pre-CS5 FLA files readable by people who own them. Comparable
+to make binary FLA files (Flash 5 through CS6) readable by people who own them. Comparable
 projects ([JPEXS Free Flash Decompiler](https://github.com/jindrapetrik/jpexs-decompiler),
 [Ruffle](https://github.com/ruffle-rs/ruffle)) have operated openly in
 this space for over a decade.

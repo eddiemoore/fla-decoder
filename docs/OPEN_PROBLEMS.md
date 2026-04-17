@@ -12,19 +12,25 @@ internal character IDs — they contain no inline shape geometry.
 - All vector shapes (fills, strokes, gradients, transforms)
 - Audio (WAV/MP3 from Media streams)
 - Bitmaps (JPEG/PNG/lossless)
-- Symbol library table (188 names from Contents stream DOM)
-- 3,493 timeline keyframes with labels, char_ids, instance names
+- Symbol library table (names, types, timestamps from Contents stream DOM)
+- Timeline keyframes with labels, char_ids, instance names
 - All AS2 scripts (frame scripts, onClipEvent handlers)
 - Text content, font names, font sizes, bounding rects
-- Layer names, page schemas
-- Interactive object properties (from onClipEvent scripts)
+- Layer metadata (name, type, lock, visible, outline color)
+- Shape tweens (CPicMorphShape with morph coordinates)
+- Background color + frame rate
+- Publish settings (130+ key-value pairs per FLA)
+- Library folder hierarchy
+- CS4 IK bones (BridgeTree/ikTreeStates XML)
+- CS4 motion tweens (AnimationCore XML)
+- Stage dimensions
 
 **What remains partially decoded:**
 - Per-frame placement data (transform matrix, depth, blend mode)
 - char_id → symbol mapping (runtime-computed, resolvable by naming)
 - CPicFrame schema > 8 tail (variable-length helpers)
-- CPicMorphShape (shape tweens)
 - CPicBitmap symbol-level metadata
+- CS4 3D transforms (no test file found with Rotation_X/Y/Translation_Z)
 
 ---
 
@@ -140,23 +146,25 @@ via 0xf2c760), u8 field_c8, schema-gated fields, CString font
 (via FUN_920900, threshold at [0x12bae88]=10), then FUN_9295c0
 (internal state, no archive reads), then more CStrings and fields.
 
-### 5. CPicMorphShape
+### 5. CPicMorphShape — SOLVED
 
-Shape tweens. Primary vtable needs to be found via constructor.
-The class is read via CArchive::ReadObject in CPicFrame schema > 12
-(FUN_771700 at CRuntimeClass 0x12946d8).
+Shape tweens are fully decoded. The class is read via
+CArchive::ReadObject in CPicFrame schema > 12 (FUN_771700 at
+CRuntimeClass 0x12946d8). Morph coordinates are in twips (1/20 pixel),
+not ultra-twips. Children include CMorphSegment and CMorphCurve with
+start/end coordinate pairs.
 
 ### 6. CPicBitmap metadata
 
 Pixel data is fully extracted. Missing: linkage name, smoothing flag,
 compression quality from the symbol-level metadata.
 
-### 7. CPicLayer schema >= 4 tail
+### 7. CPicLayer schema >= 4 tail — SOLVED
 
-Layer name is extracted (schema >= 11 CString via FUN_f34c30,
-threshold at [0x12b8a78]=11). The schema >= 4 block has additional
-fields (layer type, outline color, visibility, lock, parent index)
-that are not yet decoded. End-marker scan skips them for now.
+Layer metadata fully extracted: name (schema >= 11 CString), type
+(normal/guide/mask/masked/folder), locked flag, visible/outline flag,
+and outline color (u32 RGBA). End-marker scan handles remaining
+unknown fields.
 
 ---
 
@@ -273,37 +281,37 @@ python3 scripts/extract_library.py path/to/fla_dir/ library.json
 
 ---
 
-## CS3/CS4 features not yet supported
+## CS3/CS4/CS6 support status
 
-The current decoder was built from Flash 8's `flash.exe`. Flash CS3 (2007)
-and CS4 (2008) added major features to the binary FLA format before the
-switch to XFL/zip in CS5 (2010):
+The decoder was built from Flash 8's `flash.exe` but successfully handles
+CS3, CS4, and CS6 binary FLAs. Flash CS3 (2007) and CS4 (2008) added
+features to the binary FLA format; CS5 (2010) introduced the XFL/zip
+format but continued to support binary FLA through CS6 (2012).
 
 ### Flash CS3 (v9)
 - **ActionScript 3.0 + AVM2** — AS3 bytecode in symbol streams
 - Files targeting Flash Player 9+ may have different serialization
 
-### Flash CS4 (v10) — biggest gap
-- **Inverse Kinematics / Bone Tool** — IK armatures with bone structures.
-  Likely new CPic classes: `CPicBone`, `CIKBone`, `CIKJoint`, etc.
-- **Object-based motion tweening** — replaces classic frame-by-frame tweens
-  with interpolated motion paths. New tween data format in the timeline.
-- **3D transforms** — z-axis rotation/translation of 2D objects.
-  Adds perspective, vanishing point, z-position fields to placement data.
-- **Motion Editor curves** — bezier easing data for tween properties
+### Flash CS4 (v10) — mostly solved
+- **Inverse Kinematics / Bone Tool** — SOLVED. IK armatures stored as
+  embedded XML (`<BridgeTree>`, `<_ikTreeStates>`) in Page/Contents streams.
+- **Object-based motion tweening** — SOLVED. Stored as `<AnimationCore>`
+  XML with per-property bezier keyframe tracks.
+- **3D transforms** — NOT TESTED. No binary FLA with 3D transforms found.
+  Would appear as Rotation_X/Y, Translation_Z in AnimationCore XML.
+- **Motion Editor curves** — SOLVED (part of AnimationCore XML).
 
 ### What's needed
-1. **CS4 `Flash.exe`** from archive.org for Ghidra disassembly:
+1. **CS4 FLA with 3D transforms** — a binary FLA using the 3D Rotation
+   or 3D Translation tools, to verify the Rotation_X/Y/Translation_Z
+   extraction path. Tutorial sites from 2008-2009 are mostly dead.
+2. **CS4 `Flash.exe`** for Ghidra disassembly of any new CPic classes:
    - https://archive.org/details/adobe-flash-professional-cs-4.7z
-   - https://archive.org/details/adobe-flash-cs-4-install-americas
-2. **CS4-era FLA files** that use bones/3D/object tweens as test fixtures
-3. New class decoders for the IK/3D/tween serialization
-4. Compare CRuntimeClass tables between Flash 8 and CS4 to find new classes
 
 ### The test corpus
-All 9 FLAs in the current test corpus target **Flash Player 7** with
-**ActionScript 2** — they're pure Flash 8 era and don't use any CS3/CS4
-features. The decoder handles them at 100% shape coverage.
+17 FLAs spanning Flash 5 through CS6: 9 Flash 8 era (Flash Player 7,
+AS2), plus CS3, CS4 (IK + motion tweens), and CS6 fixtures. All decode
+at 100% shape coverage.
 
 ### CS4 format findings (verified)
 
@@ -358,9 +366,7 @@ if doc_schema == 9: 4x FUN_8fd980 (timeline data)
 if doc_schema >= 10: complex extended handling
 ```
 
-**Not found:** Frame rate and background color. All 9 test FLAs have
-identical binary values in the numeric fields after the strings,
-suggesting these are format constants, not per-document settings.
-The frame rate may be a Flash IDE default (12fps) that's only written
-to the SWF at export time, not stored in the FLA binary. Or it may
-be in a schema >= 9 field that requires more Ghidra work.
+**Note:** Frame rate and background color are NOT in CDocumentPage.
+They are stored elsewhere in the Contents stream as a binary pattern:
+RGBA(4B) + RGBA(4B) + u16(0) + u16(fps). The decoder finds them via
+pattern matching in `extract_all.py`.
