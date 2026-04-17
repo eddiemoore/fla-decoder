@@ -397,11 +397,70 @@ def deserialize_known(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
     except EOFReader as e:
         return {'class': clsname, 'eof_at_pos': r.pos, 'truncated': str(e)}
 
+def _read_flash_cstring(r: Reader) -> str:
+    """Read an MFC/Flash CString from the archive.
+       Handles: u8 len (ASCII), FF + FFFE (Unicode), FF + FFFF (long ASCII)."""
+    b = r.u8()
+    if b == 0:
+        return ''
+    if b < 0xFF:
+        return r.bytes(b).decode('latin1', 'replace')
+    ext = r.u16()
+    if ext == 0xFFFE:
+        count = r.u8()
+        if count == 0xFF:
+            count = r.u16()
+        return r.bytes(count * 2).decode('utf-16le', 'replace') if count > 0 else ''
+    elif ext == 0xFFFF:
+        count = r.u32()
+        return r.bytes(count).decode('latin1', 'replace')
+    else:
+        return r.bytes(ext).decode('latin1', 'replace')
+
 def read_cpicpage(r: Reader, ar: ArchiveReader) -> dict:
-    return read_cpicobj_fields(r, ar)       # TODO: page-specific tail
+    """CPicPage : CPicObj. Reads CPicObj base, then page-specific fields.
+
+       Decompiled from CPicPage::Serialize at primary vtable slot 2
+       (VA 0x00905cc0, loading path at 0x905dde):
+         CPicObj::Serialize(archive)
+         u8  page_schema
+         if page_schema != 4:  u16 → field_78
+         if page_schema >= 5:  u16 → field_7c
+    """
+    out = read_cpicobj_fields(r, ar)
+    try:
+        out['page_schema'] = r.u8()
+        ps = out['page_schema']
+        if ps != 4:
+            out['page_field_78'] = r.u16()
+        if ps >= 5:
+            out['page_field_7c'] = r.u16()
+    except EOFReader as e:
+        out['_page_truncated'] = str(e)
+    return out
 
 def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
-    return read_cpicobj_fields(r, ar)       # TODO: layer-specific tail
+    """CPicLayer : CPicObj. Reads CPicObj base, then layer-specific fields.
+
+       Decompiled from CPicLayer::Serialize at primary vtable slot 2
+       (VA 0x00f3e520, loading path at 0xf3e8cf):
+         CPicObj::Serialize(archive)
+         u8  layer_schema
+         FUN_f34c30 → CString layer_name (threshold=11)
+         if layer_schema <= 3: u8 → call 0xf3e420(this, value)
+         if layer_schema >= 4: more fields...
+    """
+    out = read_cpicobj_fields(r, ar)
+    try:
+        out['layer_schema'] = r.u8()
+        ls = out['layer_schema']
+        if ls >= 11:
+            out['layer_name'] = _read_flash_cstring(r)
+        if ls <= 3:
+            out['layer_field_type'] = r.u8()
+    except EOFReader as e:
+        out['_layer_truncated'] = str(e)
+    return out
 
 def read_cpicobj_fallback(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
     """Fallback for CPicObj-derived classes we don't fully decode. Reads the
@@ -654,25 +713,18 @@ def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
         if fs > 8:
             # FUN_008f9120: CString field_250 (only if schema >= 23)
             if fs >= 23:
-                cstr_byte = r.u8()
-                if cstr_byte == 0:
-                    out['frame_250'] = ''
-                elif cstr_byte == 0xFF:
-                    ext = r.u16()
-                    if ext == 0xFFFE:
-                        count = r.u8()
-                        out['frame_250'] = r.bytes(count * 2).decode('utf-16le', 'replace') if count > 0 else ''
-                    elif ext == 0xFFFF:
-                        count = r.u32()
-                        out['frame_250'] = r.bytes(count).decode('latin1', 'replace')
-                    else:
-                        out['frame_250'] = r.bytes(ext).decode('latin1', 'replace')
-                else:
-                    out['frame_250'] = r.bytes(cstr_byte).decode('latin1', 'replace')
+                try:
+                    out['frame_250'] = _read_flash_cstring(r)
+                except EOFReader:
+                    pass
             # The variable-length middle section (FUN_008facd0/008fd980/008faad0)
-            # is too complex to decode. Mark remaining as unparsed but scan the
-            # stream for shapes using the recovery scanner (which runs afterward).
+            # is too complex to decode inline. Skip forward to the parent's
+            # children-loop end marker so the parent CPicLayer parses correctly.
             out['_frame_tail_unparsed'] = True
+            end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+            idx = r.buf.find(end_marker, r.pos)
+            if idx >= 0 and idx < len(r.buf) - 12:
+                r.pos = idx
     except EOFReader as e:
         out['_frame_tail_truncated'] = str(e)
     return out
