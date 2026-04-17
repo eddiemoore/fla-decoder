@@ -390,7 +390,11 @@ def deserialize_known(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
         if clsname == 'CPicText':   return {'class': clsname, **read_cpictext(r, ar)}
         if clsname == 'CPicSprite': return {'class': clsname, **read_cpicsprite(r, ar)}
         if clsname == 'CPicButton': return {'class': clsname, **read_cpicbutton(r, ar)}
-        if clsname in ('CPicBitmap', 'CPicMorphShape', 'CPicShapeObj'):
+        if clsname == 'CPicMorphShape':
+            return {'class': clsname, **read_cpicmorphshape(r, ar)}
+        if clsname in ('CMorphSegment', 'CMorphCurve', 'CMorphHintItem'):
+            return {'class': clsname, **read_morph_subobject(r, ar)}
+        if clsname in ('CPicBitmap', 'CPicShapeObj'):
             return {'class': clsname, **read_cpicobj_fallback(clsname, r, ar)}
         return {'class': clsname, 'bytes_from_here': r.remaining(),
                 'note': 'class not implemented - stopping'}
@@ -498,6 +502,95 @@ def read_cpicobj_fallback(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
     if idx >= 0 and idx < len(r.buf) - 12:
         r.pos = idx
     return out
+
+def read_morph_subobject(r: Reader, ar: ArchiveReader) -> dict:
+    """Read CMorphSegment, CMorphCurve, or CMorphHintItem.
+       These are sub-objects within CPicMorphShape containing curve/point data
+       as sequences of s32 coordinate pairs in twips (1/20 pixel)."""
+    out = {}
+    start = r.pos
+    # Extract coordinate pairs (s32 x, s32 y) from the body
+    coords = []
+    try:
+        while r.remaining() >= 8:
+            # Check for class tags that would end this object
+            if r.remaining() >= 2:
+                peek = struct.unpack_from('<H', r.buf, r.pos)[0]
+                if peek == 0xFFFF or peek == 0x0000:
+                    break
+                if peek & 0x8000 and (peek & 0x7FFF) <= len(ar.classes):
+                    break
+            x = r.s32()
+            y = r.s32()
+            if abs(x) < 10000000 and abs(y) < 10000000:
+                coords.append({'x': x, 'y': y, 'px_x': x / 20.0, 'px_y': y / 20.0})
+            else:
+                r.pos -= 8  # put back
+                break
+    except EOFReader:
+        pass
+    if coords:
+        out['coords'] = coords
+    out['_bytes_consumed'] = r.pos - start
+    return out
+
+
+def read_cpicmorphshape(r: Reader, ar: ArchiveReader) -> dict:
+    """CPicMorphShape — shape tween (morph) with start/end shape pairs.
+       Contains CMorphSegment, CMorphCurve, and CMorphHintItem sub-objects.
+       Coordinates are in twips (1/20 pixel), not ultra-twips."""
+    out = {}
+    start = r.pos
+    try:
+        out['morph_schema'] = r.u8()
+        out['morph_flags'] = r.u8()
+        # Two 6-element matrices (start + end morph positions, 8.8 fixed-point)
+        start_matrix = [r.u32() for _ in range(6)]
+        end_matrix = [r.u32() for _ in range(6)]
+        out['start_matrix'] = {
+            'a': start_matrix[0] / 256.0, 'b': start_matrix[1] / 256.0,
+            'c': start_matrix[2] / 256.0, 'd': start_matrix[3] / 256.0,
+            'tx': start_matrix[4] / 20.0, 'ty': start_matrix[5] / 20.0,
+        }
+        out['end_matrix'] = {
+            'a': end_matrix[0] / 256.0, 'b': end_matrix[1] / 256.0,
+            'c': end_matrix[2] / 256.0, 'd': end_matrix[3] / 256.0,
+            'tx': end_matrix[4] / 20.0, 'ty': end_matrix[5] / 20.0,
+        }
+        # Extra fields (7 bytes padding) + u8 segment count
+        r.bytes(7)  # skip padding/extra fields
+        out['morph_segment_count'] = r.u8()
+        r.u8()  # skip padding byte before class tags
+        # Read embedded morph sub-objects via class tags
+        children = []
+        while r.remaining() >= 2:
+            try:
+                tag = ar.read_class_tag()
+            except (ValueError, EOFReader):
+                break
+            if tag[0] == 'null':
+                break
+            if tag[0] == 'new_class':
+                child = deserialize_known(tag[1]['name'], r, ar)
+                children.append(child)
+            elif tag[0] == 'backref':
+                idx = tag[1]['idx']
+                if 0 < idx <= len(ar.classes):
+                    clsname = ar.classes[idx - 1][1]
+                    child = deserialize_known(clsname, r, ar)
+                    children.append(child)
+                else:
+                    break
+        out['morph_children'] = children
+    except EOFReader as e:
+        out['_morph_truncated'] = str(e)
+    # End-marker scan for parent alignment
+    end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+    idx = r.buf.find(end_marker, r.pos)
+    if idx >= 0 and idx < len(r.buf) - 12:
+        r.pos = idx
+    return out
+
 
 def _read_u16str_safe(r: Reader) -> str | None:
     """Try to read an FF FE FF <len> <utf16le> string. Returns None on failure."""
@@ -893,6 +986,28 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
             **shape,
         })
         taken_regions.append((body_start, capped_end))
+
+    # ─── 1b) CPicMorphShape class-declaration recovery ────────────────
+    CPICMORPH_DECL = b'\xff\xff\x01\x00\x0e\x00CPicMorphShape'
+    for m in re.finditer(re.escape(CPICMORPH_DECL), data):
+        body_start = m.end()
+        if already_covered(body_start): continue
+        tmp_classes = list(ar.classes)
+        if not any(c[1] == 'CPicMorphShape' for c in tmp_classes):
+            tmp_classes.append((1, 'CPicMorphShape'))
+        try:
+            tmp_r = Reader(data); tmp_r.pos = body_start
+            tmp_ar2 = ArchiveReader(tmp_r); tmp_ar2.classes = list(tmp_classes)
+            morph = read_cpicmorphshape(tmp_r, tmp_ar2)
+            if morph.get('morph_children'):
+                found.append({
+                    'class': 'CPicMorphShape',
+                    '_recovered_at': body_start,
+                    '_recovered_via': 'morph_class_decl',
+                    **morph,
+                })
+        except Exception:
+            pass
 
     # ─── 2) signature-based recovery ──────────────────────────────────
     pos = start
