@@ -574,6 +574,12 @@ def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
         if labels:
             out['sprite_labels'] = labels
         out['_sprite_body_bytes'] = len(sprite_body)
+        # Skip forward to where the parent's children loop expects us.
+        # Scan for: null tag (00 00) + INT_MIN point (00 00 00 80 00 00 00 80).
+        end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+        idx = r.buf.find(end_marker, r.pos)
+        if idx >= 0 and idx < len(r.buf) - 12:
+            r.pos = idx
     except EOFReader as e:
         out['_sprite_truncated'] = str(e)
     return out
