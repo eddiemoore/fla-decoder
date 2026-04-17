@@ -2,10 +2,12 @@
   "summary": {
     "total_symbols": 841,
     "rendered_shapes": 806,
-    "behavior_sprites": 33,
+    "behavior_sprites": 34,
     "interactive_objects": 3,
+    "empty_containers": 1,
     "shape_extraction_rate": "806/841 (95.8%)",
-    "total_extraction_rate": "839/841 (99.8%)"
+    "total_extraction_rate": "840/841 (99.9%)",
+    "note": "Only 1 symbol has no useful data (empty placeholder frame in buttons.fla)."
   },
   "fla_files": {
     "ErosMustDie018.fla": {
@@ -1669,6 +1671,36 @@
             "pickUpHeart",
             "Actions"
           ]
+        },
+        {
+          "symbol_id": 25,
+          "stream_bytes": 18325,
+          "layer_name": "Walk Base",
+          "type": "character_animation_frame",
+          "frame_schema": 23,
+          "frame_count": 159,
+          "frame_labels": [
+            "standFront",
+            "standRight",
+            "standLeft",
+            "standBack",
+            "front",
+            "right",
+            "left",
+            "back",
+            "pickUpFront",
+            "pickUpRight",
+            "pickUpLeft",
+            "pickUpBack",
+            "Axel",
+            "talkFront",
+            "talkRight",
+            "talkLeft",
+            "talkBack",
+            "Actions"
+          ],
+          "script_count": 30,
+          "note": "Full Axel character controller stored as CPicFrame tail data (not CPicSprite). Contains 159 frames of walk/stand/talk/pickup animation states with AS2 pathfinding and sound sync scripts."
         }
       ],
       "interactive_objects": [
@@ -1691,14 +1723,8 @@
         }
       ],
       "text_fields": [],
-      "empty_frames": [
-        {
-          "symbol_id": 25,
-          "stream_bytes": 18325,
-          "frame_schema": 23
-        }
-      ],
-      "behavior_count": 7
+      "empty_frames": [],
+      "behavior_count": 8
     },
     "openScreen.fla": {
       "total_symbols": 0,
