@@ -576,6 +576,34 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
             out['text_font_name'] = font_name
         if font_size:
             out['text_font_size_twips'] = font_size
+        # Extract text content: null-terminated UTF-16LE stored after font name.
+        # The text is plain UTF-16LE (no length prefix), preceded by zeros.
+        if font_name:
+            # Find the font name position, then scan AFTER it
+            font_end = 0
+            for j in range(len(scan_buf) - len(font_name)*2):
+                try:
+                    candidate = scan_buf[j:j+len(font_name)*2].decode('utf-16le')
+                    if candidate == font_name:
+                        font_end = j + len(font_name) * 2
+                        break
+                except: pass
+            # Scan for printable UTF-16LE text after font name
+            text_content = None
+            for j in range(font_end, len(scan_buf) - 3):
+                if scan_buf[j+1] == 0 and 0x20 <= scan_buf[j] < 0x7F:
+                    chars = []
+                    k = j
+                    while k < len(scan_buf) - 1 and scan_buf[k+1] == 0 and 0x20 <= scan_buf[k] < 0x7F:
+                        chars.append(chr(scan_buf[k]))
+                        k += 2
+                    if len(chars) >= 2:
+                        text = ''.join(chars)
+                        if text != font_name and text not in ('Layer 1', 'Layer 2'):
+                            text_content = text
+                            break
+            if text_content:
+                out['text_content'] = text_content
         # Skip forward to the end of CPicText data. The parent CPicFrame's
         # children loop needs to find a null tag (00 00) after CPicText
         # returns, followed by the INT_MIN point sentinel. Scan for the
