@@ -125,10 +125,18 @@ def extract_all(fla_path: str) -> dict:
                 result['frame_rate'] = fps
                 break
 
-    # ── Symbol streams ───────────────────────────────────────────────
-    streams = sorted(int(s[0].split()[1])
-                     for s in ole.listdir(streams=True)
-                     if s[0].startswith('Symbol '))
+    # ── Symbol streams (Flash 8: "Symbol N", CS3/CS4: "S N timestamp") ─
+    stream_map = {}
+    for s in ole.listdir(streams=True):
+        name = s[0]
+        if name.startswith('Symbol '):
+            stream_map[int(name.split()[1])] = name
+        elif name.startswith('S ') and len(name.split()) >= 2:
+            try:
+                stream_map[int(name.split()[1])] = name
+            except ValueError:
+                pass
+    streams = sorted(stream_map.keys())
     symbols = {}
     total_shapes = 0
     total_edges = 0
@@ -149,7 +157,7 @@ def extract_all(fla_path: str) -> dict:
                     return r
 
     for sid in streams:
-        data = ole.openstream(f'Symbol {sid}').read()
+        data = ole.openstream(stream_map[sid]).read()
         decoded = decoder.decode_symbol_stream(data)
         shapes = to_svg.find_nonempty_shapes_in_result(decoded)
 
@@ -265,9 +273,10 @@ def extract_all(fla_path: str) -> dict:
     # ── Page streams ─────────────────────────────────────────────────
     pages = {}
     for s in ole.listdir(streams=True):
-        if not s[0].startswith('Page '):
+        name = s[0]
+        if not (name.startswith('Page ') or name.startswith('P ')):
             continue
-        page_data = ole.openstream(s[0]).read()
+        page_data = ole.openstream(name).read()
         page_decoded = decoder.decode_symbol_stream(page_data)
         page_shapes = to_svg.find_nonempty_shapes_in_result(page_decoded)
         page_info = {
@@ -284,7 +293,48 @@ def extract_all(fla_path: str) -> dict:
                            and not any(k in l for k in ['{', ';', '(', '='])]
             if frame_labels:
                 page_info['frame_labels'] = frame_labels
-        pages[s[0]] = page_info
+        # Extract AnimationCore XML (CS4+ motion tweens)
+        tail = page_data[page_decoded['consumed_bytes']:]
+        tpos = 0
+        while tpos < len(tail) - 6:
+            if tail[tpos:tpos + 3] == b'\xff\xfe\xff':
+                tln = tail[tpos + 3]
+                if tln == 0xFF and tpos + 6 <= len(tail):
+                    tln = tail[tpos + 4] | (tail[tpos + 5] << 8)
+                    tstart = tpos + 6
+                else:
+                    tstart = tpos + 4
+                tend = tstart + tln * 2
+                if tln > 100 and tend <= len(tail):
+                    ts = tail[tstart:tend].decode('utf-16le', 'replace')
+                    if '<AnimationCore' in ts:
+                        xml_start = ts.find('<AnimationCore')
+                        xml_end = ts.rfind('>') + 1
+                        page_info['animation_core_xml'] = ts[xml_start:xml_end]
+                tpos = max(tpos + 1, tend)
+            else:
+                tpos += 1
+        # Extract IK bone XML
+        tpos = 0
+        while tpos < len(tail) - 6:
+            if tail[tpos:tpos + 3] == b'\xff\xfe\xff':
+                tln = tail[tpos + 3]
+                if tln == 0xFF and tpos + 6 <= len(tail):
+                    tln = tail[tpos + 4] | (tail[tpos + 5] << 8)
+                    tstart = tpos + 6
+                else:
+                    tstart = tpos + 4
+                tend = tstart + tln * 2
+                if tln > 100 and tend <= len(tail):
+                    ts = tail[tstart:tend].decode('utf-16le', 'replace')
+                    if '<_ikTreeStates' in ts or '<BridgeTree' in ts:
+                        xml_start = ts.find('<')
+                        xml_end = ts.rfind('>') + 1
+                        page_info.setdefault('ik_xml', []).append(ts[xml_start:xml_end])
+                tpos = max(tpos + 1, tend)
+            else:
+                tpos += 1
+        pages[name] = page_info
     if pages:
         result['pages'] = pages
 
