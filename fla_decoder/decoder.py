@@ -458,6 +458,24 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
             out['layer_name'] = _read_flash_cstring(r)
         if ls <= 3:
             out['layer_field_type'] = r.u8()
+        # Layer schema >= 4 has additional fields (color, visibility, type,
+        # nesting) that we don't yet decode. Scan forward for the parent
+        # CPicPage's end-marker to maintain alignment.
+        if ls >= 4:
+            end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+            search = r.pos
+            while search < len(r.buf) - 14:
+                idx = r.buf.find(end_marker, search)
+                if idx < 0 or idx >= len(r.buf) - 14:
+                    break
+                after = idx + 10
+                schema_byte = r.buf[after]
+                # CPicPage schema is typically 0-10 and NOT followed by ff-fe-ff
+                # (pages don't have CString names like layers do)
+                if schema_byte <= 10:
+                    r.pos = idx
+                    break
+                search = idx + 1
     except EOFReader as e:
         out['_layer_truncated'] = str(e)
     return out
@@ -718,13 +736,26 @@ def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
                 except EOFReader:
                     pass
             # The variable-length middle section (FUN_008facd0/008fd980/008faad0)
-            # is too complex to decode inline. Skip forward to the parent's
-            # children-loop end marker so the parent CPicLayer parses correctly.
+            # is too complex to decode inline. Skip forward to the parent
+            # CPicLayer's children-loop end marker. We look for the end-marker
+            # pattern followed by a valid layer_schema (u8) + Flash CString
+            # marker (ff fe ff) to avoid false positives from nested objects.
             out['_frame_tail_unparsed'] = True
             end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
-            idx = r.buf.find(end_marker, r.pos)
-            if idx >= 0 and idx < len(r.buf) - 12:
-                r.pos = idx
+            search = r.pos
+            while search < len(r.buf) - 14:
+                idx = r.buf.find(end_marker, search)
+                if idx < 0 or idx >= len(r.buf) - 14:
+                    break
+                after = idx + 10
+                schema_byte = r.buf[after]
+                # Valid layer_schema: 0-30, followed by ff-fe-ff (CString) within 2 bytes
+                if schema_byte <= 30:
+                    rest = r.buf[after+1:after+5]
+                    if b'\xff\xfe\xff' in rest or schema_byte == 0:
+                        r.pos = idx
+                        break
+                search = idx + 1
     except EOFReader as e:
         out['_frame_tail_truncated'] = str(e)
     return out
