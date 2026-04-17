@@ -499,59 +499,52 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
     return out
 
 def read_cpicsymbol_fields(r: Reader, ar: ArchiveReader) -> dict:
-    """CPicSymbol : CPicObj. Reads CPicObj base, then symbol-specific fields:
-       symbol_schema (u8), 6-element matrix, and symbol metadata.
+    """CPicSymbol : CPicObj. Reads CPicObj base, then CPicSymbol-specific fields.
+
+       Decompiled from CPicSymbol::Serialize at primary vtable slot 2
+       (VA 0x00916800 in flash.exe):
+         CPicObj::Serialize(archive)
+         u8  symbol_schema          (schema versioning byte)
+         24B matrix at this+0x78    (read_matrix_6)
+         u16 field_b0
+         u16 field_cc
+         FUN_009024f0(archive, &this->field_90)  — struct with u8 + multiple u16s
+         FUN_00916540(archive, symbol_schema, &this->field_f0)  — frame/timeline data
+         conditional: media ref (field_d0 or field_74)
+         if symbol_schema < 10: extended timeline handling
     """
     out = read_cpicobj_fields(r, ar)
     try:
         out['symbol_schema'] = r.u8()
         out['symbol_matrix'] = read_matrix_6(r)
-        out['symbol_field_u16_a'] = r.u16()
-        out['symbol_field_u16_b'] = r.u16()
-        out['symbol_field_u16_c'] = r.u16()
-        # Variable-length fields follow. Read what we can.
-        fields_u32 = []
-        while r.remaining() >= 4 and len(fields_u32) < 8:
-            v = r.u32()
-            fields_u32.append(v)
-            if v == 0xFFFFFFFF:
-                break
-        out['symbol_fields_u32'] = fields_u32
+        out['symbol_field_b0'] = r.u16()
+        out['symbol_field_cc'] = r.u16()
     except EOFReader as e:
         out['_symbol_truncated'] = str(e)
     return out
 
-def _read_sprite_frame_block(r: Reader) -> dict | None:
-    """Try to read one sprite frame descriptor block. Returns None on failure."""
-    try:
-        block = {}
-        block['field_u16_a'] = r.u16()
-        block['field_u32_a'] = r.u32()
-        block['field_u32_b'] = r.u32()
-        block['field_u8_a'] = r.u8()
-        block['field_u32_c'] = r.u32()
-        block['field_u32_d'] = r.u32()
-        s1 = _read_u16str_safe(r)
-        if s1 is not None:
-            block['string_a'] = s1
-        s2 = _read_u16str_safe(r)
-        if s2 is not None:
-            block['string_b'] = s2
-        return block
-    except EOFReader:
-        return None
-
 def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
-    """CPicSprite : CPicSymbol : CPicObj. Reads the CPicObj base,
-       then CPicSymbol fields (symbol_schema + matrix), then extracts
-       frame labels and strings from the sprite-specific tail.
+    """CPicSprite : CPicSymbol : CPicObj. Reads CPicSymbol base,
+       then CPicSprite-specific fields.
+
+       Decompiled from CPicSprite::Serialize at primary vtable slot 2
+       (VA 0x00913d80 in flash.exe):
+         CPicSymbol::Serialize(archive)
+         u8  sprite_schema          (read directly from stream)
+         if sprite_schema >= 2: FUN_008facd0(archive, &this->field_f4)
+         FUN_00913bc0(archive, sprite_schema, &this->field_160)  — frame data
+         if sprite_schema >= 3: FUN_005c5b00(archive, &this->field_164)
+         if sprite_schema >= schema_level_6: FUN_00937590(&this->field_150, archive, mode)
+         if sprite_schema >= 5: u32 → this->field_190
+         if sprite_schema >= 8: FUN_005d4790(&this->field_15c, archive)
     """
     out = read_cpicsymbol_fields(r, ar)
     try:
-        # Extract frame labels and strings from the remaining sprite body
-        # by scanning for ff-fe-ff string markers. We don't advance r.pos
-        # past known fields because we lack a complete field map for
-        # CPicSprite::Serialize (0x00913d30).
+        out['sprite_schema'] = r.u8()
+        # Extract frame labels and strings from remaining sprite body
+        # by scanning for ff-fe-ff string markers. We don't consume bytes
+        # precisely because the sub-object serializers at 0x8facd0, 0x913bc0,
+        # 0x5c5b00 have complex variable-length layouts not yet decoded.
         sprite_body = r.buf[r.pos:]
         labels = []
         i = 0
