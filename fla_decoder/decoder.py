@@ -458,24 +458,32 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
             out['layer_name'] = _read_flash_cstring(r)
         if ls <= 3:
             out['layer_field_type'] = r.u8()
-        # Layer schema >= 4 has additional fields (color, visibility, type,
-        # nesting) that we don't yet decode. Scan forward for the parent
-        # CPicPage's end-marker to maintain alignment.
-        if ls >= 4:
-            end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
-            search = r.pos
-            while search < len(r.buf) - 14:
-                idx = r.buf.find(end_marker, search)
-                if idx < 0 or idx >= len(r.buf) - 14:
-                    break
-                after = idx + 10
-                schema_byte = r.buf[after]
-                # CPicPage schema is typically 0-10 and NOT followed by ff-fe-ff
-                # (pages don't have CString names like layers do)
-                if schema_byte <= 10:
-                    r.pos = idx
-                    break
-                search = idx + 1
+        if 4 <= ls <= 30:  # guard against misread schemas
+            out['layer_type'] = r.u8()      # 0=normal, 1=guide, 3=mask, 4=masked, 5=folder
+            out['layer_locked'] = r.u8()     # 0/1
+            out['layer_visible'] = r.u8()    # 0=visible, 1=hidden (outline)
+        if 5 <= ls <= 30:
+            out['layer_color'] = r.u32()     # outline color (ARGB)
+        if 6 <= ls <= 30:
+            out['layer_field_8c'] = r.u32()
+            out['layer_field_90'] = r.u32()
+        if 8 <= ls <= 30:
+            out['layer_field_98'] = r.u32()
+        # Remaining fields (layer type enum, parent ref via ReadObject,
+        # conditional flags) are complex and schema-interleaved.
+        # Scan forward for the parent CPicPage's end-marker.
+        end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+        search = r.pos
+        while search < len(r.buf) - 14:
+            idx = r.buf.find(end_marker, search)
+            if idx < 0 or idx >= len(r.buf) - 14:
+                break
+            after = idx + 10
+            schema_byte = r.buf[after]
+            if schema_byte <= 10:
+                r.pos = idx
+                break
+            search = idx + 1
     except EOFReader as e:
         out['_layer_truncated'] = str(e)
     return out
