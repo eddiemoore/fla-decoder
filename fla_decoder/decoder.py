@@ -406,8 +406,13 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
 def read_cpicobj_fallback(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
     """Fallback for CPicObj-derived classes we don't fully decode. Reads the
        CPicObj base (including the children loop) so the parent's parsing
-       isn't corrupted, then skips the class-specific tail."""
-    return read_cpicobj_fields(r, ar)
+       isn't corrupted, then scans for the end-marker to skip unknown tail."""
+    out = read_cpicobj_fields(r, ar)
+    end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+    idx = r.buf.find(end_marker, r.pos)
+    if idx >= 0 and idx < len(r.buf) - 12:
+        r.pos = idx
+    return out
 
 def _read_u16str_safe(r: Reader) -> str | None:
     """Try to read an FF FE FF <len> <utf16le> string. Returns None on failure."""
@@ -587,7 +592,10 @@ def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
 def read_cpicbutton(r: Reader, ar: ArchiveReader) -> dict:
     """CPicButton : CPicSymbol : CPicObj. Same base as CPicSprite."""
     out = read_cpicsymbol_fields(r, ar)
-    out['_button_tail_remaining'] = r.remaining()
+    end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+    idx = r.buf.find(end_marker, r.pos)
+    if idx >= 0 and idx < len(r.buf) - 12:
+        r.pos = idx
     return out
 def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
     """CPicFrame : CPicShape : CPicObj. Reads the inherited CPicShape body
