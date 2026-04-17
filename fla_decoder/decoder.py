@@ -602,50 +602,41 @@ def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
        first (which itself reads CPicObj's), then CPicFrame's own
        schema-dependent tail fields.
 
-       Tail layout (decompiled from FUN_008fdb80):
+       Tail layout (decompiled from loading path at 0x8fe3fa):
          u8  frame_schema
          u16 field_18c
-         if frame_schema < 3:  u32 → field_188 (legacy)
-         else:                  u16 → field_188
-         if frame_schema > 1:   s16 → field_400
-         if frame_schema > 4:
-            if DAT_013c8ec0 == 0:  u32 sound_id (legacy)
-            else:                   read CMediaSound back-ref
-         if frame_schema > 5:
-            u16 entry_count → field_500
-            per entry: u32 + u16 + u16 (8 B each) → field_1fc + i*8
-         if frame_schema > 6:
-            u16 + u8 + u32 + s32 → field_238/0x23c/0x240/0x244
-         if frame_schema > 7:  u16 → field_248
-         if frame_schema > 8:  helper FUN_008f9120 (variable)
-         if frame_schema > 9:  helper FUN_008fd980 (variable)
-         if frame_schema >= 4: helper FUN_008faad0 etc. (mid-block)
-         if frame_schema > 10: u32 + u32 → field_600/0x25c
-         if frame_schema > 11: u32 → field_254
-         if frame_schema > 12: helper FUN_00771700
-         if frame_schema > 13: u32 → field_1e4
-         if frame_schema > 14: operator>> (1 read)
-         if frame_schema > 15: helper FUN_008f9120 + string ops
-
-       Many helpers we don't decode in detail — they're variable-length; we
-       use EOF tolerance + best-effort to consume them. For schemas we've
-       observed in this project (typically 2..8) the simple field reads above
-       are enough."""
+         if frame_schema > 2:   u16 → field_188
+         else:                   u8  → field_188
+         if frame_schema > 1:   s16 → field_190
+         if frame_schema > 4:   media ref (u32 or CMediaSound lookup)
+         if frame_schema > 5:   u16 count + count × (u32 + u16 + u16)
+         if frame_schema > 6:   u16 + u8 + u32 + s32
+         if frame_schema > 7:   u16 → field_248
+         if frame_schema > 8:   FUN_008f9120 → CString field_250 (threshold=23)
+         Branch on schema:
+           >= 18: FUN_008facd0 (timeline sub-object, variable)
+           10-17: FUN_008fd980 (u32 + variable data)
+           4-9:   FUN_008faad0 + FUN_008f9570 (jump table, complex)
+         if frame_schema > 10:  u32 field_258 + u32 field_25c
+         if frame_schema > 11:  u32
+         if frame_schema > 12:  ReadObject CPicMorphShape (via 0x771700)
+         if frame_schema > 13:  u32 field_1e4
+         if frame_schema > 14:  ReadObject CObList (via 0xefefd0)
+         if frame_schema > 15:  FUN_008f9120 → CString + complex"""
     out = read_cpicshape(r, ar)
     try:
         out['frame_schema'] = r.u8()
         out['frame_18c'] = r.u16()
-        if out['frame_schema'] < 3:
-            out['frame_188'] = r.u32()
-        else:
+        fs = out['frame_schema']
+        if fs > 2:
             out['frame_188'] = r.u16()
-        if out['frame_schema'] > 1:
-            out['frame_400'] = r.s16()
-        if out['frame_schema'] > 4:
-            # Sound id (legacy path). The "CMediaSound back-ref" path requires
-            # global state we don't track — fall back to u32 read.
+        else:
+            out['frame_188'] = r.u8()
+        if fs > 1:
+            out['frame_190'] = r.s16()
+        if fs > 4:
             out['frame_sound_id'] = r.u32()
-        if out['frame_schema'] > 5:
+        if fs > 5:
             cnt = r.u16()
             out['frame_entries_count'] = cnt
             entries = []
@@ -653,16 +644,34 @@ def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
                 a = r.u32(); b = r.u16(); c = r.u16()
                 entries.append((a, b, c))
             out['frame_entries'] = entries
-        if out['frame_schema'] > 6:
+        if fs > 6:
             out['frame_238'] = r.u16()
             out['frame_23c'] = r.u8()
             out['frame_240'] = r.u32()
             out['frame_244'] = r.s32()
-        if out['frame_schema'] > 7:
+        if fs > 7:
             out['frame_248'] = r.u16()
-        # schemas >= 8 have variable-length helpers we don't decode; mark
-        # as present so the EOF handler kicks in if more data remains
-        if out['frame_schema'] > 8:
+        if fs > 8:
+            # FUN_008f9120: CString field_250 (only if schema >= 23)
+            if fs >= 23:
+                cstr_byte = r.u8()
+                if cstr_byte == 0:
+                    out['frame_250'] = ''
+                elif cstr_byte == 0xFF:
+                    ext = r.u16()
+                    if ext == 0xFFFE:
+                        count = r.u8()
+                        out['frame_250'] = r.bytes(count * 2).decode('utf-16le', 'replace') if count > 0 else ''
+                    elif ext == 0xFFFF:
+                        count = r.u32()
+                        out['frame_250'] = r.bytes(count).decode('latin1', 'replace')
+                    else:
+                        out['frame_250'] = r.bytes(ext).decode('latin1', 'replace')
+                else:
+                    out['frame_250'] = r.bytes(cstr_byte).decode('latin1', 'replace')
+            # The variable-length middle section (FUN_008facd0/008fd980/008faad0)
+            # is too complex to decode. Mark remaining as unparsed but scan the
+            # stream for shapes using the recovery scanner (which runs afterward).
             out['_frame_tail_unparsed'] = True
     except EOFReader as e:
         out['_frame_tail_truncated'] = str(e)
