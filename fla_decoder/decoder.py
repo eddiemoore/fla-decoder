@@ -387,6 +387,11 @@ def deserialize_known(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
         if clsname == 'CPicLayer':  return {'class': clsname, **read_cpiclayer(r, ar)}
         if clsname == 'CPicFrame':  return {'class': clsname, **read_cpicframe(r, ar)}
         if clsname == 'CPicShape':  return {'class': clsname, **read_cpicshape(r, ar)}
+        if clsname == 'CPicText':   return {'class': clsname, **read_cpictext(r, ar)}
+        if clsname == 'CPicSprite': return {'class': clsname, **read_cpicsprite(r, ar)}
+        if clsname == 'CPicButton': return {'class': clsname, **read_cpicbutton(r, ar)}
+        if clsname in ('CPicBitmap', 'CPicMorphShape', 'CPicShapeObj'):
+            return {'class': clsname, **read_cpicobj_fallback(clsname, r, ar)}
         return {'class': clsname, 'bytes_from_here': r.remaining(),
                 'note': 'class not implemented - stopping'}
     except EOFReader as e:
@@ -394,8 +399,185 @@ def deserialize_known(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
 
 def read_cpicpage(r: Reader, ar: ArchiveReader) -> dict:
     return read_cpicobj_fields(r, ar)       # TODO: page-specific tail
+
 def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
     return read_cpicobj_fields(r, ar)       # TODO: layer-specific tail
+
+def read_cpicobj_fallback(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
+    """Fallback for CPicObj-derived classes we don't fully decode. Reads the
+       CPicObj base (including the children loop) so the parent's parsing
+       isn't corrupted, then skips the class-specific tail."""
+    return read_cpicobj_fields(r, ar)
+
+def _read_u16str_safe(r: Reader) -> str | None:
+    """Try to read an FF FE FF <len> <utf16le> string. Returns None on failure."""
+    if r.remaining() < 4:
+        return None
+    if r.buf[r.pos:r.pos+3] != b'\xff\xfe\xff':
+        return None
+    r.pos += 3
+    ln = r.u8()
+    if r.remaining() < ln * 2:
+        return None
+    return r.bytes(ln * 2).decode('utf-16le', 'replace')
+
+def _read_mfc_cstring(r: Reader) -> str:
+    """Read an MFC-style length-prefixed UTF-16 string (u8 charlen then chars)."""
+    ln = r.u8()
+    if ln == 0xff:
+        ln = r.u16()
+    return r.bytes(ln * 2).decode('utf-16le', 'replace')
+
+def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
+    """CPicText : CPicObj. Reads the CPicObj base, then text-specific fields:
+       text_schema (u8), 6-element matrix, bounding rect (4 × s32 twips),
+       font name, font size, and text content.
+
+       We don't have a complete field map for CPicText (no Ghidra disassembly
+       of 0x0091e6f0 yet), so we extract what we can and scan for the font
+       name and text content by pattern.
+    """
+    out = read_cpicobj_fields(r, ar)
+    try:
+        out['text_schema'] = r.u8()
+        out['matrix'] = read_matrix_6(r)
+        out['text_bounds'] = {
+            'left': r.s32(), 'right': r.s32(),
+            'top': r.s32(), 'bottom': r.s32(),
+        }
+        # Remaining text-specific fields: font, size, content, alignment,
+        # color, etc. We don't know the exact layout, so scan for the font
+        # name (u8 charlen + UTF-16LE chars) and ff-fe-ff strings.
+        text_body_start = r.pos
+        text_body = r.buf[r.pos:]
+        strings_found = []
+        font_name = None
+        font_size = None
+        # Scan for MFC-style u8-length UTF-16 strings (font names)
+        i = 0
+        while i < len(text_body) - 4:
+            # ff fe ff NN = Flash-style string
+            if text_body[i:i+3] == b'\xff\xfe\xff':
+                ln = text_body[i+3]
+                end = i + 4 + ln * 2
+                if end <= len(text_body):
+                    s = text_body[i+4:end].decode('utf-16le', 'replace')
+                    strings_found.append(s)
+                i = max(i + 1, end) if end <= len(text_body) else i + 1
+                continue
+            # Look for u8 charlen followed by plausible UTF-16 text (ASCII range)
+            ln = text_body[i]
+            if 4 <= ln <= 40 and i + 1 + ln * 2 <= len(text_body):
+                candidate = text_body[i+1:i+1+ln*2]
+                try:
+                    s = candidate.decode('utf-16le')
+                    if all(0x20 <= ord(c) < 0x7F for c in s) and any(c.isalpha() for c in s):
+                        if font_name is None:
+                            font_name = s
+                            # Font size is the u16 right before the length byte
+                            if i >= 2:
+                                font_size = struct.unpack_from('<H', text_body, i - 2)[0]
+                        else:
+                            strings_found.append(s)
+                        i += 1 + ln * 2
+                        continue
+                except (UnicodeDecodeError, ValueError):
+                    pass
+            i += 1
+        if font_name:
+            out['text_font_name'] = font_name
+        if font_size:
+            out['text_font_size_twips'] = font_size
+        if strings_found:
+            out['text_strings'] = strings_found
+        # Skip to the end of the text body. We can't precisely determine
+        # where CPicText ends, so we DON'T advance r.pos here. The parent's
+        # CPicObj children loop will hit an error and the recovery scanner
+        # handles the rest.
+    except EOFReader as e:
+        out['_text_truncated'] = str(e)
+    return out
+
+def read_cpicsymbol_fields(r: Reader, ar: ArchiveReader) -> dict:
+    """CPicSymbol : CPicObj. Reads CPicObj base, then symbol-specific fields:
+       symbol_schema (u8), 6-element matrix, and symbol metadata.
+    """
+    out = read_cpicobj_fields(r, ar)
+    try:
+        out['symbol_schema'] = r.u8()
+        out['symbol_matrix'] = read_matrix_6(r)
+        out['symbol_field_u16_a'] = r.u16()
+        out['symbol_field_u16_b'] = r.u16()
+        out['symbol_field_u16_c'] = r.u16()
+        # Variable-length fields follow. Read what we can.
+        fields_u32 = []
+        while r.remaining() >= 4 and len(fields_u32) < 8:
+            v = r.u32()
+            fields_u32.append(v)
+            if v == 0xFFFFFFFF:
+                break
+        out['symbol_fields_u32'] = fields_u32
+    except EOFReader as e:
+        out['_symbol_truncated'] = str(e)
+    return out
+
+def _read_sprite_frame_block(r: Reader) -> dict | None:
+    """Try to read one sprite frame descriptor block. Returns None on failure."""
+    try:
+        block = {}
+        block['field_u16_a'] = r.u16()
+        block['field_u32_a'] = r.u32()
+        block['field_u32_b'] = r.u32()
+        block['field_u8_a'] = r.u8()
+        block['field_u32_c'] = r.u32()
+        block['field_u32_d'] = r.u32()
+        s1 = _read_u16str_safe(r)
+        if s1 is not None:
+            block['string_a'] = s1
+        s2 = _read_u16str_safe(r)
+        if s2 is not None:
+            block['string_b'] = s2
+        return block
+    except EOFReader:
+        return None
+
+def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
+    """CPicSprite : CPicSymbol : CPicObj. Reads the CPicObj base,
+       then CPicSymbol fields (symbol_schema + matrix), then extracts
+       frame labels and strings from the sprite-specific tail.
+    """
+    out = read_cpicsymbol_fields(r, ar)
+    try:
+        # Extract frame labels and strings from the remaining sprite body
+        # by scanning for ff-fe-ff string markers. We don't advance r.pos
+        # past known fields because we lack a complete field map for
+        # CPicSprite::Serialize (0x00913d30).
+        sprite_body = r.buf[r.pos:]
+        labels = []
+        i = 0
+        while i < len(sprite_body) - 4:
+            if sprite_body[i:i+3] == b'\xff\xfe\xff':
+                ln = sprite_body[i+3]
+                end = i + 4 + ln * 2
+                if end <= len(sprite_body) and ln > 0:
+                    s = sprite_body[i+4:end].decode('utf-16le', 'replace')
+                    if s.strip():
+                        labels.append(s)
+                i = max(i + 1, end) if end <= len(sprite_body) else i + 1
+            else:
+                i += 1
+        if labels:
+            out['sprite_labels'] = labels
+        out['_sprite_body_bytes'] = len(sprite_body)
+    except EOFReader as e:
+        out['_sprite_truncated'] = str(e)
+    return out
+
+def read_cpicbutton(r: Reader, ar: ArchiveReader) -> dict:
+    """CPicButton : CPicSymbol : CPicObj. Same base as CPicSprite."""
+    out = read_cpicsymbol_fields(r, ar)
+    out['_button_tail_remaining'] = r.remaining()
+    return out
 def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
     """CPicFrame : CPicShape : CPicObj. Reads the inherited CPicShape body
        first (which itself reads CPicObj's), then CPicFrame's own
