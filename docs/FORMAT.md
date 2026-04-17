@@ -5,10 +5,11 @@ authoring document (`.fla`) binary format — the OLE2 compound-document variant
 used by Flash 5 / MX / MX 2004 / 8 / CS3 / CS4 (not the XFL zip/xml format
 introduced in CS5+).
 
-This is the product of several days of reverse engineering Flash 8's
-`flash.exe` with Ghidra + olefile + capstone, resulting in a working Python
-decoder (`fla_decoder/decoder.py`) that renders ~81% of the shapes in this
-project's nine FLAs as SVG.
+This is the product of reverse engineering Flash 8's `flash.exe` with
+Ghidra + olefile + capstone, resulting in a working Python decoder
+(`fla_decoder/decoder.py`) that renders 96% of symbols (806/841) and
+recovers 100% of shapes (31,168 shapes / 16.3M edges) across a
+representative test corpus of nine FLAs.
 
 > Most of the format was **undocumented anywhere public** — even JPEXS
 > Free Flash Decompiler cannot read binary FLA. The format below was
@@ -26,10 +27,19 @@ Typical streams:
 
 | stream    | role |
 |-----------|------|
-| `Contents` | doc-level metadata, sound-library entries, publish settings |
-| `Page 1..N` | per-scene stage state |
+| `Contents` | doc-level DOM: symbol library table, sound entries, publish settings |
+| `Page 1..N` | per-scene stage state (same MFC format as Symbol streams) |
 | `Symbol N`  | one library item per stream (movie clip / graphic / shape / button / text) |
-| `Media N`   | raw asset bytes referenced from `Contents`: audio PCM/MP3, lossless bitmaps |
+| `Media N`   | raw asset bytes: audio PCM/MP3, JPEG, PNG, lossless bitmaps |
+
+### Contents stream: symbol library table
+
+The `Contents` stream contains a library item record for each symbol.
+Each record includes a `"Symbol N"` MFC CString (u8 charlen + UTF-16LE)
+followed by a `ff fe ff` Flash string with the library name. The symbol
+number maps directly to the `Symbol N` OLE stream.
+
+Extractable via `scripts/extract_library.py`.
 
 ---
 
@@ -165,17 +175,30 @@ u8  shape_schema                   — different from shape_data_schema below
 shape_data (see §6)
 ```
 
-### `CPicFrame::Serialize`
+### `CPicFrame::Serialize` (loading path at 0x8fe3fa)
 
 ```
 CPicShape::Serialize(ar)           — includes base CPicObj too, so full inherited chain
-u8  frame_schema
-u16 field_at_0x18c
-u16 field_at_0x188
-u16 field_at_0x190
-if (global 0x013c8ec0 == 0): write u16(0)  else: read CSomethingImportant object ref
-u16 field_at_0x1f4
-... many more frame-specific fields (not yet fully decoded)
+u8   frame_schema
+u16  field_18c
+if frame_schema > 2:  u16 → field_188
+else:                  u8  → field_188
+if frame_schema > 1:  s16 → field_190
+if frame_schema > 4:  u32 media_ref (or CMediaSound lookup)
+if frame_schema > 5:  u16 count + count × (u32 + u16 + u16)
+if frame_schema > 6:  u16 + u8 + u32 + s32 (field_238/23c/240/244)
+if frame_schema > 7:  u16 → field_248
+if frame_schema > 8:  CString field_250 (threshold=23)
+  Schema branch:
+    >= 18: FUN_8facd0 (timeline sub-object with embedded ReadObject)
+    10-17: FUN_8fd980 (u32 + variable data)
+    4-9:   FUN_8faad0 + FUN_8f9570 (jump table)
+if frame_schema > 10: u32 + u32 (field_258/25c)
+if frame_schema > 11: u32
+if frame_schema > 12: ReadObject CPicMorphShape
+if frame_schema > 13: u32 field_1e4
+if frame_schema > 14: ReadObject CObList
+if frame_schema > 15: CString + complex
 ```
 
 ### `CPicPage::Serialize`
@@ -188,6 +211,69 @@ if page_schema >  4: u16  field_0x7c
 if page_schema <  2: default_init()
 if page_schema >  6: u32  field_0xb4
 if page_schema >  2: FUN_00a47a00(ar)              — additional block (undecoded)
+```
+
+### `CPicLayer::Serialize` (loading path at 0xf3e8cf)
+
+```
+CPicObj::Serialize(ar)
+u8   layer_schema
+FUN_f34c30 → CString layer_name   (threshold at [0x12b8a78]=11)
+if layer_schema <= 3: u8 field_type
+if layer_schema >= 4: additional fields (type, color, visibility, lock — not yet decoded)
+```
+
+### `CPicText::Serialize` (loading path at 0x929cf4)
+
+Inheritance: CPicText : CPicObj (NOT CPicShape — no shape body).
+
+```
+CPicObj::Serialize(ar)
+u8   text_schema
+24B  matrix                          → 0xf2c400
+16B  bounds (4 × s32 twips)          → 0xf2c760
+u8   field_c8
+if text_schema >= 3: u8 extra (consumed, not stored)
+if text_schema >= 5: u32 field_120
+elif text_schema >= 4: u16 → field_120
+if text_schema >= 4: u16 field_124
+if text_schema >= 4: CString font_name  (via FUN_920900, threshold=10)
+FUN_9295c0 (internal state only, no archive reads)
+if text_schema >= 6: CString field_134  (via FUN_920900, threshold=10)
+if text_schema >= 9: FUN_937590 sub-object at field_74
+if text_schema >= 8: u32 field_10c
+Text content: null-terminated UTF-16LE (no length prefix), follows font data
+```
+
+### `CPicSymbol::Serialize` (loading path at 0x91719c)
+
+Inheritance: CPicSymbol : CPicObj.
+
+```
+CPicObj::Serialize(ar)
+u8   symbol_schema
+24B  matrix at this+0x78             → 0xf2c400
+u16  field_b0
+u16  field_cc (if symbol_schema > 1)
+FUN_009024f0 → field_90 struct      — u8 skip + 4 × u16
+FUN_00916540 → CString name         (threshold at [0x12b9718]=13)
+u32  media_ref                       (via 0x4c9350)
+if symbol_schema >= 11: u8 flag + CStrings + frame data
+```
+
+### `CPicSprite::Serialize` (VA 0x00913d80)
+
+Inheritance: CPicSprite : CPicSymbol : CPicObj.
+
+```
+CPicSymbol::Serialize(ar)
+u8   sprite_schema
+if sprite_schema >= 2: FUN_8facd0 (timeline sub-object)
+FUN_913bc0 → CString               (threshold=7)
+if sprite_schema >= 3: FUN_5c5b00
+if sprite_schema >= schema_level_6: FUN_937590
+if sprite_schema >= 5: u32 → field_190
+if sprite_schema >= 8: FUN_5d4790
 ```
 
 ### `CMediaSound::Serialize` (fully decoded)
@@ -479,49 +565,52 @@ Things we have NOT fully decoded (project never needed them):
 
 File                                  | purpose
 --------------------------------------|---------------------------------------
-`fla_decoder/decoder.py`              | ~650-LOC pure-Python decoder (olefile + struct)
+`fla_decoder/decoder.py`              | Pure-Python decoder (olefile + struct)
 `fla_decoder/to_svg.py`               | SVG emitter with gradient + matrix-transform support
 `fla_decoder/audio.py`                | audio extractor using §8 layout
 `fla_decoder/lossless.py`             | lossless-bitmap extractor using §7 layout
 `fla_decoder/bitmaps.py`              | raw + DefineBitsLossless bitmap extractor
 `scripts/decode.py`                   | batch driver across all FLAs in a directory
 `scripts/audit.py`                    | list unrendered symbols + their text/script content
-`scripts/inspect.py`                  | per-symbol class tree / strings / bounds inventory
+`scripts/inspect_symbols.py`           | per-symbol class tree / strings / bounds inventory
+`scripts/extract_library.py`          | symbol library table + timeline extraction
 `scripts/extract_media.py`            | one-shot CLI for audio + bitmaps + lossless
 `docs/RE_JOURNEY.md`                  | RE journey log (where each function was found)
 `research/find_class_refs.py`         | PE parser to locate CRuntimeClass structs
 `research/decode_runtime_classes.py`  | scan .data for class descriptors
-`research/find_serialize.py`          | locate Serialize VAs via vtable slot 4
+`research/find_serialize.py`          | locate Serialize VAs via vtable slot 2 (primary)
 `research/data/runtime_classes.json`  | all 46 CRuntimeClass entries from flash.exe
 `research/data/serialize_vas.json`    | Serialize function VAs per class
 
-## 11.5 Recovery scanner (resync after CPicFrame tail)
+## 11.5 Recovery scanner
 
-`CPicFrame` has dozens of schema-dependent tail fields and helper-function
-calls (sound IDs, timeline entries, layer transforms, miter limits, child
-sprite refs, …). For `frame_schema >= 9` these include variable-length
-helpers we haven't decoded yet, so the structured parser stops there.
+`CPicFrame` has dozens of schema-dependent tail fields for
+`frame_schema >= 9` including variable-length helpers that the
+structured parser can't fully decode. Two recovery strategies:
 
-Workaround: a **signature scan** that walks the unread tail of the stream
-looking for the 10-byte CPicShape header tail (`00 00  00 00 00 80  00 00 00 80`
-= NULL child tag + two INT_MIN sentinels). For each hit, attempt to read a
-CPicShape body 2 bytes earlier (where schema/flags would be). Accept
-candidates with ≥ 3 edges and ≥ 60 bytes consumed.
+1. **Class-declaration recovery**: finds `FFFF 01 00 09 00 CPicShape`
+   class-tag patterns and parses the shape body that follows.
 
-Implemented in `decoder.scan_for_shapes()`. Runs on the entire stream
-(start=0, not just past where structured parsing bailed) so that
-symbols where the structured parser walked 100% successfully but found
-no shapes (e.g. big CPicSprite containers whose shapes are nested
-inside sub-sprites) also benefit. On a representative test corpus of
-nine FLAs (841 symbols total), this raises overall yield from 81% →
-**95%**. Extreme example: a 2.1 MB symbol containing a fountain-scene
-preview goes from 0 edges → 139 shapes / 95k edges via this scan alone.
+2. **Signature recovery**: scans for the 10-byte CPicShape header
+   tail (`00 00  00 00 00 80  00 00 00 80` = NULL child tag + two
+   INT_MIN point sentinels). Tries parsing at offsets -2, -1, 0, -3.
+   Accepts candidates with ≥ 3 edges, plausible schema (≤ 8), and
+   coordinates within ±50k px.
 
-The residual 5% are genuinely shape-less: CPicSprite animation
-state-machines (which reference shapes we've already rendered — they're
-pure composition metadata), and empty CPicText / CPicFrame fields.
-Extractable with `scripts/audit.py`, which emits the frame labels +
-ActionScript strings embedded in them.
+**Taken-region tracking**: each recovered shape marks a byte region
+to prevent duplicate recovery. Region size is capped to
+`n_edges × 12 + 1000` bytes (based on observed ~8-12 bytes per edge)
+to prevent one inflated shape from blocking nearby shapes.
+
+**End-marker scan**: child classes (CPicText, CPicSprite, CPicButton)
+that can't precisely consume their bytes scan forward for the pattern
+`00 00  00 00 00 80  00 00 00 80` followed by a valid parent schema
+byte, to reposition the reader for the parent's continuation.
+
+**Results**: 100% shape coverage (31,168 shapes / 16.3M edges, 0
+missed across 9 FLAs). 806/841 symbols render to SVG (96%). The
+remaining 35 symbols are genuinely shape-less composition containers
+(33 CPicSprite + 2 empty CPicFrame).
 
 The scan's main false-positive guard is checking that the byte right
 before our signature is a plausible schema byte (≤ 8) and the next is a
