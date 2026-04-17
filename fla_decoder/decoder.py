@@ -494,6 +494,14 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
             out['text_font_name'] = font_name
         if font_size:
             out['text_font_size_twips'] = font_size
+        # Skip forward to the end of CPicText data. The parent CPicFrame's
+        # children loop needs to find a null tag (00 00) after CPicText
+        # returns, followed by the INT_MIN point sentinel. Scan for the
+        # pattern: 00 00  00 00 00 80  00 00 00 80 (null tag + INT_MIN point).
+        end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+        idx = r.buf.find(end_marker, scan_start)
+        if idx >= 0 and idx < len(r.buf) - 12:
+            r.pos = idx
     except EOFReader as e:
         out['_text_truncated'] = str(e)
     return out
