@@ -503,15 +503,15 @@ def read_cpicsymbol_fields(r: Reader, ar: ArchiveReader) -> dict:
 
        Decompiled from CPicSymbol::Serialize at primary vtable slot 2
        (VA 0x00916800 in flash.exe):
-         CPicObj::Serialize(archive)
-         u8  symbol_schema          (schema versioning byte)
-         24B matrix at this+0x78    (read_matrix_6)
+         CPicObj::Serialize(archive)               → 0x00902d70
+         u8  symbol_schema                         (schema versioning)
+         24B matrix at this+0x78                   → 0x00f2c2b0
          u16 field_b0
          u16 field_cc
-         FUN_009024f0(archive, &this->field_90)  — struct with u8 + multiple u16s
-         FUN_00916540(archive, symbol_schema, &this->field_f0)  — frame/timeline data
-         conditional: media ref (field_d0 or field_74)
-         if symbol_schema < 10: extended timeline handling
+         FUN_009024f0: u8 skip + 4 × u16          (field_90 struct)
+         FUN_00916540 → 0x4710e0: u8-len CString  (symbol name at field_f0)
+         u32 media_ref                             (field_d0/field_74)
+         if symbol_schema < 10: extended handling  (skipped for schema 14)
     """
     out = read_cpicobj_fields(r, ar)
     try:
@@ -519,6 +519,11 @@ def read_cpicsymbol_fields(r: Reader, ar: ArchiveReader) -> dict:
         out['symbol_matrix'] = read_matrix_6(r)
         out['symbol_field_b0'] = r.u16()
         out['symbol_field_cc'] = r.u16()
+        r.u8()  # field_90 marker (always 1, skipped on load)
+        out['field_90'] = [r.u16() for _ in range(4)]
+        cstr_len = r.u8()
+        out['symbol_name'] = r.bytes(cstr_len).decode('ascii', 'replace') if cstr_len > 0 else ''
+        out['media_ref'] = r.u32()
     except EOFReader as e:
         out['_symbol_truncated'] = str(e)
     return out
@@ -541,10 +546,9 @@ def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
     out = read_cpicsymbol_fields(r, ar)
     try:
         out['sprite_schema'] = r.u8()
+        sprite_data_start = r.pos
         # Extract frame labels and strings from remaining sprite body
-        # by scanning for ff-fe-ff string markers. We don't consume bytes
-        # precisely because the sub-object serializers at 0x8facd0, 0x913bc0,
-        # 0x5c5b00 have complex variable-length layouts not yet decoded.
+        # by scanning for ff-fe-ff string markers.
         sprite_body = r.buf[r.pos:]
         labels = []
         i = 0
