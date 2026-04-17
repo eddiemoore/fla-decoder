@@ -47,6 +47,43 @@ def extract_library_table(contents: bytes) -> dict[int, str]:
     return library
 
 
+def extract_publish_settings(contents: bytes) -> dict:
+    """Extract publish settings (key=value pairs) from the Contents stream."""
+    strings = []
+    pos = 0
+    while pos < len(contents) - 4:
+        if contents[pos:pos + 3] == b'\xff\xfe\xff':
+            ln = contents[pos + 3]
+            end = pos + 4 + ln * 2
+            if ln > 0 and end <= len(contents):
+                s = contents[pos + 4:end].decode('utf-16le', 'replace')
+                strings.append(s)
+            pos = end
+        else:
+            pos += 1
+
+    settings = {}
+    for i in range(len(strings) - 1):
+        key, val = strings[i], strings[i + 1]
+        if '::' in key and not ('::' in val):
+            section, prop = key.rsplit('::', 1)
+            section = section.replace('Properties', '').replace('Publish', '').strip()
+            if val and len(val) < 200:
+                settings[f'{section}.{prop}'] = val
+
+    # Extract stage dimensions specifically
+    for i in range(len(strings) - 1):
+        key, val = strings[i], strings[i + 1]
+        if key.endswith('::Width') and 'Html' in key and val.isdigit():
+            settings['stage_width'] = int(val)
+        if key.endswith('::Height') and 'Html' in key and val.isdigit():
+            settings['stage_height'] = int(val)
+        if key == 'PublishFormatProperties::flashFileName':
+            settings['swf_filename'] = val
+
+    return settings
+
+
 def extract_timeline_frames(data: bytes, start_pos: int = 0) -> list[dict]:
     """Extract per-frame timeline data from a symbol's frame tail."""
     def read_str(data, pos):
@@ -126,8 +163,10 @@ def process_fla(fla_path: str) -> dict:
     if ole.exists('Contents'):
         contents = ole.openstream('Contents').read()
         result['library'] = extract_library_table(contents)
+        result['publish_settings'] = extract_publish_settings(contents)
     else:
         result['library'] = {}
+        result['publish_settings'] = {}
 
     streams = sorted(int(s[0].split()[1])
                      for s in ole.listdir(streams=True)
