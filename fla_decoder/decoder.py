@@ -872,10 +872,11 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
         res = _try_parse_shape_at(data, body_start, tmp_ar, min_edges=1)
         if res is None: continue
         shape, end_pos = res
-        # Cap taken region to prevent one shape from blocking the entire stream.
-        # A single CPicShape body is rarely > 50KB; inflated end_pos comes from
-        # the end-marker scan in child deserializers.
-        capped_end = min(end_pos, body_start + 50000)
+        # Cap taken region based on actual edge count to prevent one shape
+        # from blocking neighbors. Real shapes are ~10-50 bytes per edge.
+        n_edges = len(shape.get('shape', {}).get('byte_edges', []))
+        max_region = max(500, n_edges * 12 + 1000)
+        capped_end = min(end_pos, body_start + max_region)
         found.append({
             'class': 'CPicShape',
             '_recovered_at': body_start,
@@ -900,7 +901,9 @@ def scan_for_shapes(data: bytes, ar: ArchiveReader, start: int = 0,
             res = _try_parse_shape_at(data, body_start, ar, min_edges=3)
             if res is None: continue
             shape, end_pos = res
-            capped_end = min(end_pos, body_start + 50000)
+            n_edges = len(shape.get('shape', {}).get('byte_edges', []))
+            max_region = max(500, n_edges * 12 + 1000)
+            capped_end = min(end_pos, body_start + max_region)
             found.append({
                 'class': 'CPicShape',
                 '_recovered_at': body_start,
