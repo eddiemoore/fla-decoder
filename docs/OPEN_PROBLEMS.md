@@ -270,3 +270,37 @@ python3 scripts/extract_library.py path/to/fla_dir/ library.json
 - `audit.py` shows 35 unrendered (33 CPicSprite + 2 empty CPicFrame)
 - Recovery scanner finds 31,168 shapes with 0 missed
 - Total edges: ~16.3M
+
+---
+
+## CS3/CS4 features not yet supported
+
+The current decoder was built from Flash 8's `flash.exe`. Flash CS3 (2007)
+and CS4 (2008) added major features to the binary FLA format before the
+switch to XFL/zip in CS5 (2010):
+
+### Flash CS3 (v9)
+- **ActionScript 3.0 + AVM2** — AS3 bytecode in symbol streams
+- Files targeting Flash Player 9+ may have different serialization
+
+### Flash CS4 (v10) — biggest gap
+- **Inverse Kinematics / Bone Tool** — IK armatures with bone structures.
+  Likely new CPic classes: `CPicBone`, `CIKBone`, `CIKJoint`, etc.
+- **Object-based motion tweening** — replaces classic frame-by-frame tweens
+  with interpolated motion paths. New tween data format in the timeline.
+- **3D transforms** — z-axis rotation/translation of 2D objects.
+  Adds perspective, vanishing point, z-position fields to placement data.
+- **Motion Editor curves** — bezier easing data for tween properties
+
+### What's needed
+1. **CS4 `Flash.exe`** from archive.org for Ghidra disassembly:
+   - https://archive.org/details/adobe-flash-professional-cs-4.7z
+   - https://archive.org/details/adobe-flash-cs-4-install-americas
+2. **CS4-era FLA files** that use bones/3D/object tweens as test fixtures
+3. New class decoders for the IK/3D/tween serialization
+4. Compare CRuntimeClass tables between Flash 8 and CS4 to find new classes
+
+### The test corpus
+All 9 FLAs in the current test corpus target **Flash Player 7** with
+**ActionScript 2** — they're pure Flash 8 era and don't use any CS3/CS4
+features. The decoder handles them at 100% shape coverage.
