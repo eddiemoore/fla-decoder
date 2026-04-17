@@ -40,7 +40,16 @@ def extract_library_table(contents: bytes) -> dict[int, str]:
                     if ln > 0 and search + 4 + ln * 2 <= len(contents):
                         name = contents[search + 4:search + 4 + ln * 2].decode('utf-16le', 'replace')
                         if '/' not in name and not name.startswith('.\\'):
-                            library[sym_num] = name
+                            # Read symbol type: u32 id + u8 type after name
+                            name_end_pos = search + 4 + ln * 2
+                            sym_type = None
+                            if name_end_pos + 5 <= len(contents):
+                                sym_type = contents[name_end_pos + 4]
+                            type_names = {0: 'graphic', 1: 'button', 2: 'movieclip'}
+                            library[sym_num] = {
+                                'name': name,
+                                'type': type_names.get(sym_type, f'type_{sym_type}') if sym_type is not None else 'unknown',
+                            }
                             break
                 search += 1
         pos = idx + 1
@@ -199,7 +208,10 @@ def process_fla(fla_path: str) -> dict:
         }
 
         if sid in result['library']:
-            sym_info['library_name'] = result['library'][sid]
+            lib_entry = result['library'][sid]
+            sym_info['library_name'] = lib_entry['name'] if isinstance(lib_entry, dict) else lib_entry
+            if isinstance(lib_entry, dict) and lib_entry.get('type'):
+                sym_info['symbol_type'] = lib_entry['type']
 
         def find(n, t):
             if isinstance(n, dict):
