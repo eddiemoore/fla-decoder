@@ -121,6 +121,20 @@ def extract_all(fla_path: str) -> dict:
     total_edges = 0
     total_recovered = 0
 
+    def find(n, t):
+        if isinstance(n, dict):
+            if n.get('class') == t:
+                return n
+            for v in n.values():
+                r = find(v, t)
+                if r:
+                    return r
+        elif isinstance(n, list):
+            for x in n:
+                r = find(x, t)
+                if r:
+                    return r
+
     for sid in streams:
         data = ole.openstream(f'Symbol {sid}').read()
         decoded = decoder.decode_symbol_stream(data)
@@ -142,20 +156,6 @@ def extract_all(fla_path: str) -> dict:
         total_shapes += sym['shape_count']
         total_edges += sym['edge_count']
         total_recovered += len(decoded.get('recovered_shapes', []))
-
-        def find(n, t):
-            if isinstance(n, dict):
-                if n.get('class') == t:
-                    return n
-                for v in n.values():
-                    r = find(v, t)
-                    if r:
-                        return r
-            elif isinstance(n, list):
-                for x in n:
-                    r = find(x, t)
-                    if r:
-                        return r
 
         # Layer metadata
         layer = find(decoded['body'], 'CPicLayer')
