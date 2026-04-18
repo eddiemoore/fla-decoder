@@ -692,37 +692,96 @@ def _read_mfc_cstring(r: Reader) -> str:
         ln = r.u16()
     return r.bytes(ln * 2).decode('utf-16le', 'replace')
 
-def _read_conditional_cstring(r: Reader, text_schema: int, threshold: int = 10) -> str:
-    """Read a CString conditionally: only if text_schema >= threshold.
-       Mirrors FUN_920900 (VA 0x920900, threshold at [0x12bae88]=10)."""
-    if text_schema >= threshold:
-        return _read_flash_cstring(r)
-    return ''
+def _read_ccolordef(r: Reader, schema: int) -> str:
+    """Read a CColorDef (font name / color string) from archive.
+       Format depends on schema:
+         schema >= 10: u8 count + count×2 bytes UTF-16LE
+         schema <  10: u8 count + count bytes ASCII
+       Decompiled from FUN_91d230 (VA 0x91d230)."""
+    count = r.u8()
+    if count == 0:
+        return ''
+    if schema >= 10:
+        return r.bytes(count * 2).decode('utf-16le', 'replace')
+    else:
+        return r.bytes(count).decode('latin1', 'replace')
+
+
+def _read_text_run(r: Reader) -> dict:
+    """Read a single text run's formatting data.
+       Decompiled from FUN_91d310 (VA 0x91d310, loading path at 0x91d830).
+       Returns formatting fields for one text run."""
+    run = {}
+    run['run_schema'] = r.u8()
+    rs = run['run_schema']
+    if rs >= 2:
+        run['char_count'] = r.u16()
+        run['font_name'] = _read_ccolordef(r, rs)
+        run['font_color'] = r.u32()
+        run['bold'] = r.u8()
+        run['italic'] = r.u8()
+        if rs >= 3:
+            run['align'] = r.u8()
+            run['field_4b'] = r.u8()
+            run['field_4c'] = r.u8()
+            run['field_4d'] = r.u8()
+        else:
+            packed = r.u8()
+            run['align'] = packed & 0x03
+        run['field_8d4'] = r.u8()
+        run['indent'] = r.u16()
+        run['line_spacing'] = r.u16()
+        run['left_margin'] = r.u16()
+        run['right_margin'] = r.u16()
+        run['field_8de'] = r.u16()
+        if rs >= 5:
+            run['highlight'] = _read_ccolordef(r, rs)
+        if rs >= 6:
+            run['field_8e0'] = r.u8()
+            run['field_8e1'] = r.u8()
+            run['field_8e2'] = r.u8()
+        if rs >= 8:
+            run['field_8e3'] = r.u8()
+        if rs >= 7:
+            run['url_color'] = _read_ccolordef(r, rs)
+    return run
+
+
+def _read_text_body(r: Reader, unicode_mode: bool) -> dict:
+    """Read text body data (FUN_9295c0, VA 0x9295c0).
+       Reads: u16 text_length + text_run formatting + text data."""
+    body = {}
+    text_length = r.u16()
+    body['text_length'] = text_length
+    if text_length == 0:
+        return body
+    try:
+        body['text_run'] = _read_text_run(r)
+    except EOFReader:
+        body['_run_truncated'] = True
+        return body
+    # Read actual text characters
+    if unicode_mode:
+        raw = r.bytes(text_length * 2)
+        body['text'] = raw.decode('utf-16le', 'replace')
+    else:
+        raw = r.bytes(text_length)
+        body['text'] = raw.decode('latin1', 'replace')
+    return body
 
 
 def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
     """CPicText : CPicObj. Reads the CPicObj base, then text-specific fields.
 
        Decompiled from CPicText::Serialize at primary vtable slot 2
-       (VA 0x00929800 in flash.exe, loading path at 0x929cf4):
-         CPicObj::Serialize(archive)
-         u8  text_schema
-         24B matrix at this+0x80
-         16B bounds at this+0x98
-         u8  field_c8
-         if text_schema >= 3:  u8 (discarded)
-         if text_schema >= 5:  u32 field_120 (else u16 if == 4)
-         if text_schema >= 4:  u16 field_124 (font size in twips)
-         if text_schema >= 4:  CColorDef field_128 (font color/name)
-         if text_schema >= 4 and field_121 & 0x20:  CColorDef field_12c
-         [text run deserialization: 0x91d310]
-         [text body: 0x9295c0 — u16 count + per-char data]
-         if text_schema >= 6:  CColorDef field_134
-         if text_schema >= 9:  FUN_937590 sub-object at field_74
-         if text_schema >= 8:  u32 field_10c (clamped 0/1)
-         if text_schema >= 11: CColorDef field_138
-         if text_schema >= 12: CColorDef field_130
-         if text_schema >= 13: u8 filter_flag + optional filter + u16 field_64
+       (VA 0x00929800 in flash.exe, loading path at 0x929cf4).
+
+       CColorDef format (FUN_91d230): u8 count + count×2 bytes UTF-16LE
+       (for schema >= 10) or count bytes ASCII (for schema < 10).
+
+       Text body (FUN_9295c0): u16 text_length + text_run + text data.
+       Text run (FUN_91d310): u8 run_schema + u16 char_count + CColorDef
+       font_name + u32 color + u8 bold + u8 italic + conditional fields.
     """
     out = read_cpicobj_fields(r, ar)
     try:
@@ -741,62 +800,52 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
         elif ts >= 4:
             out['text_field_120'] = r.u16()
         if ts >= 4:
-            out['text_font_size_twips'] = r.u16()
-            out['text_font_color'] = _read_conditional_cstring(r, ts)
-            # Conditional second color (only if bit 0x20 is set in field_121)
-            # field_121 is byte 1 of the u32 at field_120
-            if out.get('text_field_120', 0) & 0x2000:  # byte 1 bit 5
-                out['text_highlight_color'] = _read_conditional_cstring(r, ts)
-        # Font name scan: the CColorDef fields above may contain font/color
-        # data. The actual font name is in the text run data or later fields.
-        # Scan remaining bytes for font name pattern.
+            out['text_field_124'] = r.u16()
+            # field_128 via FUN_920900: conditional MFC CString (threshold=10)
+            if ts >= 10:
+                out['text_color_128'] = _read_flash_cstring(r)
+            # Conditional second color (only if byte 1 bit 5 of field_120)
+            field_121 = (out.get('text_field_120', 0) >> 8) & 0xFF
+            if field_121 & 0x20:
+                if ts >= 10:
+                    out['text_color_12c'] = _read_flash_cstring(r)
+        # Multiline check: byte 1 bit 6 of field_120
+        field_121 = (out.get('text_field_120', 0) >> 8) & 0xFF
+        is_multiline = bool(field_121 & 0x40)
+        if is_multiline:
+            # Multiline: read master text run directly
+            try:
+                out['text_master_run'] = _read_text_run(r)
+            except EOFReader:
+                out['_master_run_truncated'] = True
+        # Text body: always called (reads text_length + run + text)
+        unicode_mode = ts >= 10
+        try:
+            out['text_body'] = _read_text_body(r, unicode_mode)
+            if out['text_body'].get('text'):
+                out['text_content'] = out['text_body']['text']
+            run = out['text_body'].get('text_run', {})
+            if run.get('font_name'):
+                out['text_font_name'] = run['font_name']
+            if run.get('char_count'):
+                # Font size is in text_field_124 (twips), not in the run
+                pass
+            if out.get('text_field_124'):
+                out['text_font_size_twips'] = out['text_field_124']
+        except EOFReader:
+            out['_text_body_truncated'] = True
+        # Post-text-body fields
         scan_start = r.pos
-        scan_buf = r.buf[scan_start:]
-        font_name = None
-        i = 0
-        while i < len(scan_buf) - 4:
-            ln = scan_buf[i]
-            if 4 <= ln <= 40 and i + 1 + ln * 2 <= len(scan_buf):
-                candidate = scan_buf[i+1:i+1+ln*2]
-                try:
-                    s = candidate.decode('utf-16le')
-                    if all(0x20 <= ord(c) < 0x7F for c in s) and any(c.isalpha() for c in s):
-                        if font_name is None:
-                            font_name = s
-                        i += 1 + ln * 2
-                        continue
-                except (UnicodeDecodeError, ValueError):
-                    pass
-            i += 1
-        if font_name:
-            out['text_font_name'] = font_name
-        # Extract text content: null-terminated UTF-16LE stored after font name
-        if font_name:
-            font_end = 0
-            for j in range(len(scan_buf) - len(font_name)*2):
-                try:
-                    candidate = scan_buf[j:j+len(font_name)*2].decode('utf-16le')
-                    if candidate == font_name:
-                        font_end = j + len(font_name) * 2
-                        break
-                except: pass
-            text_content = None
-            for j in range(font_end, len(scan_buf) - 3):
-                if scan_buf[j+1] == 0 and 0x20 <= scan_buf[j] < 0x7F:
-                    chars = []
-                    k = j
-                    while k < len(scan_buf) - 1 and scan_buf[k+1] == 0 and 0x20 <= scan_buf[k] < 0x7F:
-                        chars.append(chr(scan_buf[k]))
-                        k += 2
-                    if len(chars) >= 2:
-                        text = ''.join(chars)
-                        if text != font_name and text not in ('Layer 1', 'Layer 2'):
-                            text_content = text
-                            break
-            if text_content:
-                out['text_content'] = text_content
-        # Skip to end-marker for remaining complex fields (text runs, text body,
-        # filters). Full text run parsing is deferred.
+        try:
+            if ts >= 6 and ts >= 10:
+                out['text_color_134'] = _read_flash_cstring(r)
+            # schema >= 9: FUN_937590 sub-object (complex, skip)
+            # schema >= 8: u32 field_10c
+            # schema >= 11-13: more CColorDefs + filter
+            # These are complex; use end-marker scan for the rest
+        except EOFReader:
+            pass
+        # End-marker scan for remaining fields
         end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
         idx = r.buf.find(end_marker, scan_start)
         if idx >= 0 and idx < len(r.buf) - 12:
