@@ -61,13 +61,29 @@ class Reader:
 # ── MFC class-tag reader ────────────────────────────────────────────────────
 
 class ArchiveReader:
-    """Mimics CArchive::ReadObject semantics. Maintains class-table + object-table."""
+    """Mimics CArchive::ReadObject semantics.
+
+    MFC uses a combined class+object table (m_pLoadArray). Each NEWCLASS
+    registration allocates TWO entries: one for the CRuntimeClass*, one
+    for the newly-created CObject*. Backref tags index into this combined
+    table: odd indices are class definitions, even indices are objects.
+
+    A class backref (odd index) means "create a new object of this class".
+    An object backref (even index) means "reuse a previously-created object"
+    (rare in FLA streams).
+    """
     NULL  = 0x0000
     NEWCLASS = 0xFFFF
     def __init__(self, r: Reader):
         self.r = r
-        self.classes: list[tuple[int, str]] = []   # [(schema, name), ...], 1-indexed
-        self.objects: list = []                    # for back-refs
+        self.classes: list[tuple[int, str]] = []   # [(schema, name), ...]
+        self.map: list = []                         # combined class+object table
+
+    def register_class(self, name: str, schema: int = 1):
+        """Register a new class (called by NEWCLASS tag handler)."""
+        self.classes.append((schema, name))
+        self.map.append(('class', name, schema))    # odd index: class
+        self.map.append(('object', name))            # even index: object
 
     def read_u16str(self) -> str:
         """Read an FF FE FF <len> <len utf-16le chars> string."""
@@ -91,10 +107,19 @@ class ArchiveReader:
             schema = self.r.u16()
             name_len = self.r.u16()
             name = self.r.bytes(name_len).decode('ascii', 'replace')
-            self.classes.append((schema, name))
+            self.register_class(name, schema)
             return ('new_class', {'name': name, 'schema': schema, 'idx': len(self.classes)})
         if tag & 0x8000:
-            return ('backref', {'idx': tag & 0x7FFF})
+            idx = tag & 0x7FFF
+            # Map combined index to class name
+            map_idx = idx - 1  # 0-based
+            if 0 <= map_idx < len(self.map):
+                entry = self.map[map_idx]
+                if entry[0] == 'class':
+                    return ('backref', {'idx': idx, 'name': entry[1]})
+                else:
+                    return ('backref', {'idx': idx, 'name': entry[1]})
+            return ('backref', {'idx': idx})
         raise ValueError(f'bad class tag 0x{tag:04x} @ 0x{self.r.pos-2:x}')
 
 # ── decoders per MFC class ─────────────────────────────────────────────────
@@ -360,8 +385,8 @@ def read_cpicobj_fields(r: Reader, ar: ArchiveReader) -> dict:
             clsname = tag[1]['name']
             children.append(deserialize_known(clsname, r, ar))
         elif tag[0] == 'backref':
-            if 0 < tag[1]['idx'] <= len(ar.classes):
-                clsname = ar.classes[tag[1]['idx']-1][1]
+            clsname = tag[1].get('name')
+            if clsname:
                 children.append({'class': clsname, 'backref': True,
                                  'child': deserialize_known(clsname, r, ar)})
             else:
@@ -697,9 +722,8 @@ def read_cpicmorphshape(r: Reader, ar: ArchiveReader) -> dict:
                 child = deserialize_known(tag[1]['name'], r, ar)
                 children.append(child)
             elif tag[0] == 'backref':
-                idx = tag[1]['idx']
-                if 0 < idx <= len(ar.classes):
-                    clsname = ar.classes[idx - 1][1]
+                clsname = tag[1].get('name')
+                if clsname:
                     child = deserialize_known(clsname, r, ar)
                     children.append(child)
                 else:
