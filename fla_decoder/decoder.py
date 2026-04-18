@@ -517,30 +517,29 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
         out['_layer_truncated'] = str(e)
     # End-marker scan: find the CPicPage null tag + INT_MIN point.
     # Multiple end-markers may exist (nested objects also have INT_MIN points).
-    # The CORRECT one is followed by a valid page_schema with reasonable
-    # field values (field_84_count should be small or zero).
+    # The CORRECT one is the LAST valid match (closest to stream end),
+    # since CPicPage is the outermost object.
     end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+    best = -1
     search = r.pos
     while search < len(r.buf) - 14:
         idx = r.buf.find(end_marker, search)
         if idx < 0 or idx >= len(r.buf) - 14:
             break
         after = idx + 12  # past null_tag(2) + point(8) + extra1(1) + extra2(1)
-        if after >= len(r.buf):
-            search = idx + 1
-            continue
-        schema_byte = r.buf[after]
-        if schema_byte <= 15:
-            # Verify: if page_schema >= 3, field_84_count at after+9 should be small
-            valid = True
-            if schema_byte >= 3 and after + 13 <= len(r.buf):
-                f84_count = struct.unpack_from('<I', r.buf, after + 9)[0]
-                if f84_count > 1000:
-                    valid = False
-            if valid:
-                r.pos = idx
-                break
+        if after < len(r.buf):
+            schema_byte = r.buf[after]
+            if schema_byte <= 15:
+                valid = True
+                if schema_byte >= 3 and after + 13 <= len(r.buf):
+                    f84_count = struct.unpack_from('<I', r.buf, after + 9)[0]
+                    if f84_count > 1000:
+                        valid = False
+                if valid:
+                    best = idx
         search = idx + 1
+    if best >= 0:
+        r.pos = best
     return out
 
 def read_cpicbitmap(r: Reader, ar: ArchiveReader) -> dict:
