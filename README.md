@@ -13,7 +13,7 @@ audio, bitmaps, text, scripts, timeline data, and document properties.
 
 ## Status
 
-Tested on 17 FLAs spanning Flash 5 through CS6:
+Tested on 17+ FLAs spanning Flash 5 through CS6:
 
 - **100% shape coverage** — 31,168 shapes / 16.3M edges, zero missed
 - **96% symbol render rate** — 806/841 symbols rendered to SVG

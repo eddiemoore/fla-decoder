@@ -29,12 +29,15 @@ internal character IDs — they contain no inline shape geometry.
 - CPicLayer: all conditional fields (mode, parent ReadObject, schema 2-10 u8s)
 - CPicPage: field_b4 + field_84 array (2 × u32 per entry)
 
-**Byte consumption: 100.0%** (945,525/945,528 — 3 bytes of OLE2 padding)
+**Byte consumption: 100.0%** (2,705,725/2,705,729 — 4 bytes OLE2 padding
+across 17 FLAs / 166 symbols, including Digital Classroom lesson files)
+
+**Frame schemas tested:** 0, 1, 2, 3, 7, 13, 18, 24, 26, 29, 32, 46,
+114, 128, 174, 202, 243, 252, 255 — all parse correctly.
 
 **What remains partially decoded:**
 - Per-frame placement data (transform matrix, depth, blend mode)
 - char_id → symbol mapping (runtime-computed, resolvable by naming)
-- CPicFrame schema 10-18 tail (no test files with these schemas)
 - CS4 3D transforms (no test file found with Rotation_X/Y/Translation_Z)
 
 ---
