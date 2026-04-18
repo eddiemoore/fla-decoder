@@ -394,7 +394,9 @@ def deserialize_known(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
             return {'class': clsname, **read_cpicmorphshape(r, ar)}
         if clsname in ('CMorphSegment', 'CMorphCurve', 'CMorphHintItem'):
             return {'class': clsname, **read_morph_subobject(r, ar)}
-        if clsname in ('CPicBitmap', 'CPicShapeObj'):
+        if clsname == 'CPicBitmap':
+            return {'class': clsname, **read_cpicbitmap(r, ar)}
+        if clsname == 'CPicShapeObj':
             return {'class': clsname, **read_cpicobj_fallback(clsname, r, ar)}
         return {'class': clsname, 'bytes_from_here': r.remaining(),
                 'note': 'class not implemented - stopping'}
@@ -497,6 +499,35 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
     except EOFReader as e:
         out['_layer_truncated'] = str(e)
     return out
+
+def read_cpicbitmap(r: Reader, ar: ArchiveReader) -> dict:
+    """CPicBitmap : CPicObj. Reads CPicObj base, then bitmap-specific fields.
+
+       Decompiled from CPicBitmap::Serialize at primary vtable slot 2
+       (VA 0x008e8710, loading path at 0x8e8810):
+         CPicObj::Serialize(archive)
+         u8  bitmap_schema
+         24B matrix at this+0x78
+         u16 media_id (or ReadObject via sound manager)
+         if bitmap_schema >= 2:  u8 filter_flag
+           if filter_flag != 0:  filter Serialize (complex)
+    """
+    out = read_cpicobj_fields(r, ar)
+    try:
+        out['bitmap_schema'] = r.u8()
+        out['bitmap_matrix'] = read_matrix_6(r)
+        out['bitmap_media_id'] = r.u16()
+        if out['bitmap_schema'] >= 2:
+            out['bitmap_filter_flag'] = r.u8()
+    except EOFReader as e:
+        out['_bitmap_truncated'] = str(e)
+    # End-marker scan for any remaining data (filter objects etc.)
+    end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+    idx = r.buf.find(end_marker, r.pos)
+    if idx >= 0 and idx < len(r.buf) - 12:
+        r.pos = idx
+    return out
+
 
 def read_cpicobj_fallback(clsname: str, r: Reader, ar: ArchiveReader) -> dict:
     """Fallback for CPicObj-derived classes we don't fully decode. Reads the
@@ -661,6 +692,14 @@ def _read_mfc_cstring(r: Reader) -> str:
         ln = r.u16()
     return r.bytes(ln * 2).decode('utf-16le', 'replace')
 
+def _read_conditional_cstring(r: Reader, text_schema: int, threshold: int = 10) -> str:
+    """Read a CString conditionally: only if text_schema >= threshold.
+       Mirrors FUN_920900 (VA 0x920900, threshold at [0x12bae88]=10)."""
+    if text_schema >= threshold:
+        return _read_flash_cstring(r)
+    return ''
+
+
 def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
     """CPicText : CPicObj. Reads the CPicObj base, then text-specific fields.
 
@@ -668,19 +707,22 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
        (VA 0x00929800 in flash.exe, loading path at 0x929cf4):
          CPicObj::Serialize(archive)
          u8  text_schema
-         24B matrix at this+0x80                    (read_matrix_6 via 0xf2c400)
-         16B bounds at this+0x98                    (4 × s32 via 0xf2c760)
+         24B matrix at this+0x80
+         16B bounds at this+0x98
          u8  field_c8
-         if text_schema >= 3:  u8 extra (local, not stored)
-         if text_schema >= 5:  u32 field_120 (else u16 if >= 4)
-         if text_schema >= 4:  u16 field_124
-         if text_schema >= 4:  FUN_920900 → CString field_128 (font, if schema >= 10)
-         FUN_9295c0 (internal state only, no archive reads)
-         if text_schema >= 6:  FUN_920900 → CString field_134 (font, if schema >= 10)
+         if text_schema >= 3:  u8 (discarded)
+         if text_schema >= 5:  u32 field_120 (else u16 if == 4)
+         if text_schema >= 4:  u16 field_124 (font size in twips)
+         if text_schema >= 4:  CColorDef field_128 (font color/name)
+         if text_schema >= 4 and field_121 & 0x20:  CColorDef field_12c
+         [text run deserialization: 0x91d310]
+         [text body: 0x9295c0 — u16 count + per-char data]
+         if text_schema >= 6:  CColorDef field_134
          if text_schema >= 9:  FUN_937590 sub-object at field_74
-         if text_schema >= 8:  u32 field_10c
-       Font name is extracted by pattern scanning since the exact CString
-       byte alignment between field_128 and field_134 is ambiguous.
+         if text_schema >= 8:  u32 field_10c (clamped 0/1)
+         if text_schema >= 11: CColorDef field_138
+         if text_schema >= 12: CColorDef field_130
+         if text_schema >= 13: u8 filter_flag + optional filter + u16 field_64
     """
     out = read_cpicobj_fields(r, ar)
     try:
@@ -693,19 +735,24 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
         out['text_field_c8'] = r.u8()
         ts = out['text_schema']
         if ts >= 3:
-            r.u8()  # extra byte (consumed but not stored)
+            r.u8()  # discarded byte
         if ts >= 5:
             out['text_field_120'] = r.u32()
         elif ts >= 4:
             out['text_field_120'] = r.u16()
         if ts >= 4:
-            out['text_field_124'] = r.u16()
-        # Font name: scan remaining bytes for u8-length + UTF-16LE pattern
-        # since exact CString alignment depends on the font reader chain
+            out['text_font_size_twips'] = r.u16()
+            out['text_font_color'] = _read_conditional_cstring(r, ts)
+            # Conditional second color (only if bit 0x20 is set in field_121)
+            # field_121 is byte 1 of the u32 at field_120
+            if out.get('text_field_120', 0) & 0x2000:  # byte 1 bit 5
+                out['text_highlight_color'] = _read_conditional_cstring(r, ts)
+        # Font name scan: the CColorDef fields above may contain font/color
+        # data. The actual font name is in the text run data or later fields.
+        # Scan remaining bytes for font name pattern.
         scan_start = r.pos
         scan_buf = r.buf[scan_start:]
         font_name = None
-        font_size = None
         i = 0
         while i < len(scan_buf) - 4:
             ln = scan_buf[i]
@@ -716,8 +763,6 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
                     if all(0x20 <= ord(c) < 0x7F for c in s) and any(c.isalpha() for c in s):
                         if font_name is None:
                             font_name = s
-                            if i >= 2:
-                                font_size = struct.unpack_from('<H', scan_buf, i - 2)[0]
                         i += 1 + ln * 2
                         continue
                 except (UnicodeDecodeError, ValueError):
@@ -725,12 +770,8 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
             i += 1
         if font_name:
             out['text_font_name'] = font_name
-        if font_size:
-            out['text_font_size_twips'] = font_size
-        # Extract text content: null-terminated UTF-16LE stored after font name.
-        # The text is plain UTF-16LE (no length prefix), preceded by zeros.
+        # Extract text content: null-terminated UTF-16LE stored after font name
         if font_name:
-            # Find the font name position, then scan AFTER it
             font_end = 0
             for j in range(len(scan_buf) - len(font_name)*2):
                 try:
@@ -739,7 +780,6 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
                         font_end = j + len(font_name) * 2
                         break
                 except: pass
-            # Scan for printable UTF-16LE text after font name
             text_content = None
             for j in range(font_end, len(scan_buf) - 3):
                 if scan_buf[j+1] == 0 and 0x20 <= scan_buf[j] < 0x7F:
@@ -755,10 +795,8 @@ def read_cpictext(r: Reader, ar: ArchiveReader) -> dict:
                             break
             if text_content:
                 out['text_content'] = text_content
-        # Skip forward to the end of CPicText data. The parent CPicFrame's
-        # children loop needs to find a null tag (00 00) after CPicText
-        # returns, followed by the INT_MIN point sentinel. Scan for the
-        # pattern: 00 00  00 00 00 80  00 00 00 80 (null tag + INT_MIN point).
+        # Skip to end-marker for remaining complex fields (text runs, text body,
+        # filters). Full text run parsing is deferred.
         end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
         idx = r.buf.find(end_marker, scan_start)
         if idx >= 0 and idx < len(r.buf) - 12:

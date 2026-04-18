@@ -28,8 +28,8 @@ internal character IDs — they contain no inline shape geometry.
 **What remains partially decoded:**
 - Per-frame placement data (transform matrix, depth, blend mode)
 - char_id → symbol mapping (runtime-computed, resolvable by naming)
-- CPicFrame schema > 8 tail (variable-length helpers)
-- CPicBitmap symbol-level metadata
+- CPicFrame schema 10-18 tail (FUN_8fd980/8faad0, no test files with these schemas)
+- CPicText text runs and body (complex sub-structures in 0x91d310/0x9295c0)
 - CS4 3D transforms (no test file found with Rotation_X/Y/Translation_Z)
 
 ---
@@ -67,39 +67,24 @@ pages). This fixes parent alignment without fully decoding the child.
 
 ## Remaining gaps
 
-### 1. CPicFrame schema > 8 tail (structural decode)
+### 1. CPicFrame schema > 8 tail — MOSTLY SOLVED
 
-All shapes are already recovered by the scanner, but 596 symbols have
-`_frame_tail_unparsed: True`. Fully decoding the tail would move shapes
-from `recovered_shapes` into the structured body tree with proper
-frame/layer association.
+Schema >= 19 (all test FLAs use schema 29) is fully decoded field-by-field.
+Schema 10-18 still uses the end-marker scan fallback, but no test files
+have these schemas.
 
-**Confirmed layout (loading path at 0x8fe3fa):**
+**Key findings:**
+- Sound field at schema > 4 is **u16** (not u32)
+- FUN_8facd0 (schema >= 19) reads: u32 type_id + u32 format_type +
+  u32 init + u32 count + count × u32 char_ids + CString label
+- 12 post-timeline fields: f258/f25c (>10), f254 (>11), ReadObject
+  morph (>12), f1e4 (>13), ReadObject oblist (>14), CString f298 (>15),
+  f294 (>19), f24c (>20), f264 (>=22), f194+f198 (>=24)
+- CPicPage also has u32 field_b4 (schema >= 7) and array field_84 (>= 3)
 
-```
-Schema > 7:   u16 → field_248
-Schema > 8:   FUN_8f9120 → CString field_250 (threshold=23)
-Schema branch:
-  >= 18:      FUN_8facd0 (timeline sub-object, variable-length)
-  10-17:      FUN_8fd980 (u32 + variable data)
-  4-9:        FUN_8faad0 + FUN_8f9570 (jump table, complex)
-Schema > 10:  u32 field_258 + u32 field_25c
-Schema > 11:  u32
-Schema > 12:  CArchive::ReadObject CPicMorphShape (via FUN_771700)
-Schema > 13:  u32 field_1e4
-Schema > 14:  CArchive::ReadObject CObList (via FUN_efefd0)
-Schema > 15:  CString + complex object creation
-```
-
-**Key finding:** FUN_771700 reads a CPicMorphShape via standard
-ReadObject (class-tag protocol). FUN_efefd0 reads a CObList the
-same way. These use the same machinery the decoder already handles.
-
-**Blocker:** The variable-length middle section (FUN_8facd0 for
-schema >= 18) contains the timeline composition data with embedded
-CPic* objects via ReadObject. Decoding it requires understanding
-FUN_8f9570 (per-frame reader) which reads schema-gated fields
-including a 7-u32 placement matrix at schema >= 4.
+**Still open for schema 10-18:** FUN_8fd980 (schema 10-17) and
+FUN_8faad0 + FUN_8f9570 (schema 4-9) are not decoded. These use
+different timeline data formats with per-frame readers.
 
 ### 2. Per-frame placement matrix
 
@@ -132,19 +117,37 @@ appear as an explicit table in the binary.
 convention. The library table is extracted from the Contents stream
 DOM via `scripts/extract_library.py`.
 
-### 4. CPicText exact field layout
+### 4. CPicText — MOSTLY SOLVED
 
-The decoder extracts text_schema, matrix, bounds, font name, font
-size, and text content. But the exact byte layout between bounds
-and font name has some unknown fields (u32, u16, empty CString).
-The text content is stored as null-terminated UTF-16LE without a
-length prefix.
+The field layout between bounds and font name is now confirmed from
+Ghidra. The decoder extracts: text_schema, matrix, bounds, field_c8,
+font_size_twips, font_color (CColorDef), font_name, and text_content.
 
-**Primary vtable slot 2:** `0x00929800` (loading path at 0x929cf4).
-Confirmed reads: u8 schema, matrix (24B via 0xf2c400), rect (16B
-via 0xf2c760), u8 field_c8, schema-gated fields, CString font
-(via FUN_920900, threshold at [0x12bae88]=10), then FUN_9295c0
-(internal state, no archive reads), then more CStrings and fields.
+**Full layout (loading path at 0x929cf4):**
+```
+u8  text_schema
+24B matrix at 0x80
+16B bounds at 0x98
+u8  field_c8
+if schema >= 3:  u8 (discarded)
+if schema >= 5:  u32 field_120 (else u16 if == 4)
+if schema >= 4:  u16 field_124 (font size in twips)
+if schema >= 4:  CColorDef field_128 (conditional CString, threshold=10)
+if schema >= 4 and field_121 & 0x20:  CColorDef field_12c
+[text run deserialization via 0x91d310 — complex per-run data]
+[text body via 0x9295c0 — u16 count + per-char data]
+if schema >= 6:   CColorDef field_134
+if schema >= 9:   FUN_937590 sub-object at field_74
+if schema >= 8:   u32 field_10c (clamped 0/1)
+if schema >= 11:  CColorDef field_138
+if schema >= 12:  CColorDef field_130
+if schema >= 13:  u8 filter_flag + optional filter + u16 field_64
+```
+
+**Still open:** Text run deserialization (0x91d310) reads per-run
+formatting: char count, font color, bold/italic flags, alignment,
+spacing, and tab stops. Text body (0x9295c0) reads the actual
+character data. Both are complex enough to warrant separate work.
 
 ### 5. CPicMorphShape — SOLVED
 
@@ -154,10 +157,22 @@ CRuntimeClass 0x12946d8). Morph coordinates are in twips (1/20 pixel),
 not ultra-twips. Children include CMorphSegment and CMorphCurve with
 start/end coordinate pairs.
 
-### 6. CPicBitmap metadata
+### 6. CPicBitmap metadata — MOSTLY SOLVED
 
-Pixel data is fully extracted. Missing: linkage name, smoothing flag,
-compression quality from the symbol-level metadata.
+Pixel data is fully extracted. Symbol-level metadata now decoded:
+bitmap_schema(u8), matrix(24B), media_id(u16), filter_flag(u8).
+
+**Full layout (loading path at 0x8e8810):**
+```
+u8  bitmap_schema
+24B matrix at this+0x78
+u16 media_id (or ReadObject via sound manager at runtime)
+if schema >= 2:  u8 filter_flag
+  if filter_flag != 0:  filter Serialize (0x84e1e0, complex)
+```
+
+Missing: linkage name (stored elsewhere in Contents stream),
+smoothing flag (may be in filter data), compression quality.
 
 ### 7. CPicLayer schema >= 4 tail — SOLVED
 
