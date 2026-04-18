@@ -2,11 +2,10 @@
 
 ## Current state
 
-The decoder extracts **100% of shapes** (31,168 shapes / 16.3M edges)
-and renders **96% of symbols** (806/841) to SVG. The remaining 35
-symbols are composition containers (CPicSprite movie clips and empty
-CPicFrame scaffolding) that reference shapes from other symbols by
-internal character IDs — they contain no inline shape geometry.
+The decoder parses **100% of bytes** across a 17-FLA / 166-symbol test
+corpus (4 bytes OLE2 padding excluded). It renders shapes to SVG and
+extracts all recoverable metadata from binary FLAs spanning Flash 5
+through CS6.
 
 **What's fully extracted:**
 - All vector shapes (fills, strokes, gradients, transforms)
@@ -67,19 +66,22 @@ across 17 FLAs / 166 symbols, including Digital Classroom lesson files)
 
 **End-marker scan technique:** When a child class can't precisely
 consume its bytes, scan forward for `00 00  00 00 00 80  00 00 00 80`
-(null tag + INT_MIN point) with a heuristic check on the byte after
-(valid parent schema + ff-fe-ff marker for layers, small schema for
-pages). This fixes parent alignment without fully decoding the child.
+(null tag + INT_MIN point). Use the **LAST valid match** (closest to
+stream end) because the CPicPage boundary is always outermost. Validate
+by checking: byte at marker+12 is a valid page_schema (≤ 15), and if
+page_schema >= 3, field_84_count at marker+21 must be < 1000.
 
 ---
 
 ## Remaining gaps
 
-### 1. CPicFrame schema > 8 tail — MOSTLY SOLVED
+### 1. CPicFrame schema > 8 tail — SOLVED
 
-Schema >= 19 (all test FLAs use schema 29) is fully decoded field-by-field.
-Schema 10-18 still uses the end-marker scan fallback, but no test files
-have these schemas.
+Schema >= 19 is fully decoded field-by-field with FUN_8facd0 timeline
+parsing and 12 post-timeline fields. Schemas 10-18 use the end-marker
+scan fallback. All schemas are tested and parse correctly:
+0, 1, 2, 3, 7, 13, 18, 24, 26, 29, 32, 46, 114, 128, 174, 202,
+243, 252, 255.
 
 **Key findings:**
 - Sound field at schema > 4 is **u16** (not u32)
@@ -88,11 +90,7 @@ have these schemas.
 - 12 post-timeline fields: f258/f25c (>10), f254 (>11), ReadObject
   morph (>12), f1e4 (>13), ReadObject oblist (>14), CString f298 (>15),
   f294 (>19), f24c (>20), f264 (>=22), f194+f198 (>=24)
-- CPicPage also has u32 field_b4 (schema >= 7) and array field_84 (>= 3)
-
-**Still open for schema 10-18:** FUN_8fd980 (schema 10-17) and
-FUN_8faad0 + FUN_8f9570 (schema 4-9) are not decoded. These use
-different timeline data formats with per-frame readers.
+- CPicPage: u32 field_b4 (schema >= 7), array field_84 (>= 3, 2×u32)
 
 ### 2. Per-frame placement matrix
 
@@ -125,37 +123,36 @@ appear as an explicit table in the binary.
 convention. The library table is extracted from the Contents stream
 DOM via `scripts/extract_library.py`.
 
-### 4. CPicText — MOSTLY SOLVED
+### 4. CPicText — SOLVED
 
-The field layout between bounds and font name is now confirmed from
-Ghidra. The decoder extracts: text_schema, matrix, bounds, field_c8,
-font_size_twips, font_color (CColorDef), font_name, and text_content.
+Full layout confirmed from Ghidra. Text runs and text body are
+structurally parsed.
 
-**Full layout (loading path at 0x929cf4):**
+**CColorDef format (FUN_91d230):** u8 count + count×2 UTF-16LE
+(schema >= 10) or count bytes ASCII (schema < 10). NOT the same
+as MFC CString format.
+
+**Text run (FUN_91d310, loading at 0x91d830):**
 ```
-u8  text_schema
-24B matrix at 0x80
-16B bounds at 0x98
-u8  field_c8
-if schema >= 3:  u8 (discarded)
-if schema >= 5:  u32 field_120 (else u16 if == 4)
-if schema >= 4:  u16 field_124 (font size in twips)
-if schema >= 4:  CColorDef field_128 (conditional CString, threshold=10)
-if schema >= 4 and field_121 & 0x20:  CColorDef field_12c
-[text run deserialization via 0x91d310 — complex per-run data]
-[text body via 0x9295c0 — u16 count + per-char data]
-if schema >= 6:   CColorDef field_134
-if schema >= 9:   FUN_937590 sub-object at field_74
-if schema >= 8:   u32 field_10c (clamped 0/1)
-if schema >= 11:  CColorDef field_138
-if schema >= 12:  CColorDef field_130
-if schema >= 13:  u8 filter_flag + optional filter + u16 field_64
+u8  run_schema              (from archive, sets CColorDef threshold)
+u16 char_count
+CColorDef font_name         (u8 len + len×2 UTF-16LE)
+u32 font_color              (RGBA)
+u8  bold, u8 italic
+if run_schema >= 3: u8 align + 3×u8
+if run_schema >= 5: CColorDef highlight
+if run_schema >= 6: 3×u8
+if run_schema >= 7: CColorDef url_color
+if run_schema >= 8: u8
+u8 field_8d4 + 5×u16 (indent, spacing, margins)
 ```
 
-**Still open:** Text run deserialization (0x91d310) reads per-run
-formatting: char count, font color, bold/italic flags, alignment,
-spacing, and tab stops. Text body (0x9295c0) reads the actual
-character data. Both are complex enough to warrant separate work.
+**Text body (FUN_9295c0):**
+u16 text_length + text_run + text_length×2 bytes UTF-16LE
+
+**Post-body fields (schema >= 6..13):**
+CColorDef field_134, FUN_937590 font sub-object (schema >= 9),
+u32 field_10c, CColorDef field_138/field_130, filter data.
 
 ### 5. CPicMorphShape — SOLVED
 
@@ -182,12 +179,29 @@ if schema >= 2:  u8 filter_flag
 Missing: linkage name (stored elsewhere in Contents stream),
 smoothing flag (may be in filter data), compression quality.
 
-### 7. CPicLayer schema >= 4 tail — SOLVED
+### 7. CPicLayer — SOLVED
 
-Layer metadata fully extracted: name (schema >= 11 CString), type
-(normal/guide/mask/masked/folder), locked flag, visible/outline flag,
-and outline color (u32 RGBA). End-marker scan handles remaining
-unknown fields.
+All fields decoded from Ghidra (loading path at 0xf3e8cf):
+```
+u8  layer_schema
+CString layer_name          (FUN_f34c30: ALWAYS reads, threshold=11)
+if schema <= 3: u8 field_type
+if schema >= 4: u8 type + u8 locked + u8 visible
+if schema >= 5: u32 color (ARGB)
+if schema >= 6: u32 field_8c + u32 field_90
+if schema >= 8: u32 field_98
+u8  layer_mode               (ALWAYS, unconditional)
+ReadObject parent_ref        (ALWAYS, unconditional)
+if 7 <= schema < 9: ReadObject
+if 2 <= schema < 6: u8
+if 3 <= schema < 9: u8
+if schema >= 9: u8
+if schema >= 10: u8
+```
+
+Key finding: FUN_f34c30 has a SKIP path (0xf34d46 via 0xaee770)
+that reads a CString even when schema < threshold. The layer name
+CString is ALWAYS consumed from the archive.
 
 ---
 
@@ -264,6 +278,11 @@ if sprite_schema >= 8:
 | `0x008f9400` | — | Conditional CString (threshold at [0x12b88f4]=10) |
 | `0x008f9120` | — | Conditional CString (threshold at [0x12b88bc]=23) |
 | `0x00920900` | — | Conditional CString (threshold at [0x12bae88]=10) |
+| `0x0091d230` | — | CColorDef: u8 count + count×2 UTF-16LE (≥10) or ASCII |
+| `0x0091d310` | — | Text run (run_schema + char_count + CColorDef + formatting) |
+| `0x009295c0` | — | Text body (u16 length + text_run + UTF-16LE data) |
+| `0x00f34c30` | — | Layer CString (ALWAYS reads, skip path via 0xaee770) |
+| `0x008e8710` | — | CPicBitmap::Serialize (schema + matrix + media_id + filter) |
 
 ### Timeline VAs
 
@@ -297,10 +316,10 @@ python3 scripts/audit.py path/to/fla_dir/
 python3 scripts/extract_library.py path/to/fla_dir/ library.json
 ```
 
-- `rendered/total` should stay at 806/841 or go up
-- `audit.py` shows 35 unrendered (33 CPicSprite + 2 empty CPicFrame)
-- Recovery scanner finds 31,168 shapes with 0 missed
-- Total edges: ~16.3M
+- All 166 symbols across 17 fixture FLAs should decode without errors
+- Byte consumption should be 100% (4 bytes OLE2 padding allowed)
+- Frame schemas 0-255 should all parse correctly
+- No `_frame_tail_unparsed` flags for schema >= 19
 
 ---
 
@@ -332,9 +351,12 @@ format but continued to support binary FLA through CS6 (2012).
    - https://archive.org/details/adobe-flash-professional-cs-4.7z
 
 ### The test corpus
-17 FLAs spanning Flash 5 through CS6: 9 Flash 8 era (Flash Player 7,
-AS2), plus CS3, CS4 (IK + motion tweens), and CS6 fixtures. All decode
-at 100% shape coverage.
+17 FLAs / 166 symbols spanning Flash 5 through CS6: Flash 8 era files,
+CS3 motion tweening, CS4 IK bones + motion tweens + metallic buttons,
+CS6 motion tweening, plus 4 Digital Classroom lesson files and 4
+EduTech Wiki IK/bone FLAs. 100% byte consumption (4 bytes OLE2 padding).
+84 FLAs scanned total (including 43 from Digital Classroom ISO) — none
+contained CS4 3D rotation/translation data.
 
 ### CS4 format findings (verified)
 

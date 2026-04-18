@@ -7,9 +7,9 @@ XFL zip/xml format also available from CS5+).
 
 This is the product of reverse engineering Flash 8's `flash.exe` with
 Ghidra + olefile + capstone, resulting in a working Python decoder
-(`fla_decoder/decoder.py`) that renders 96% of symbols (806/841) and
-recovers 100% of shapes (31,168 shapes / 16.3M edges) across a test
-corpus of 17 FLAs spanning Flash 5 through CS6.
+(`fla_decoder/decoder.py`) that achieves **100% byte consumption**
+across a test corpus of 17 FLAs / 166 symbols spanning Flash 5
+through CS6 (2,705,725/2,705,729 bytes — 4 bytes OLE2 padding).
 
 > Most of the format was **undocumented anywhere public** — even JPEXS
 > Free Flash Decompiler cannot read binary FLA. The format below was
@@ -184,33 +184,41 @@ u16  field_18c
 if frame_schema > 2:  u16 → field_188
 else:                  u8  → field_188
 if frame_schema > 1:  s16 → field_190
-if frame_schema > 4:  u32 media_ref (or CMediaSound lookup)
+if frame_schema > 4:  u16 sound_ref (NOT u32 — confirmed via Ghidra + empirical)
 if frame_schema > 5:  u16 count + count × (u32 + u16 + u16)
 if frame_schema > 6:  u16 + u8 + u32 + s32 (field_238/23c/240/244)
 if frame_schema > 7:  u16 → field_248
 if frame_schema > 8:  CString field_250 (threshold=23)
   Schema branch:
-    >= 18: FUN_8facd0 (timeline sub-object with embedded ReadObject)
-    10-17: FUN_8fd980 (u32 + variable data)
+    >= 19: FUN_8facd0 (timeline: u32 type_id + u32 fmt + u32 init +
+           u32 count + count × u32 char_ids + CString label)
+    10-18: FUN_8fd980 (u32 + variable data)
     4-9:   FUN_8faad0 + FUN_8f9570 (jump table)
-if frame_schema > 10: u32 + u32 (field_258/25c)
-if frame_schema > 11: u32
+if frame_schema > 10: u32 field_258 + u32 field_25c
+if frame_schema > 11: u32 field_254 (clamped ≤ 1)
 if frame_schema > 12: ReadObject CPicMorphShape
 if frame_schema > 13: u32 field_1e4
 if frame_schema > 14: ReadObject CObList
-if frame_schema > 15: CString + complex
+if frame_schema > 15: CString field_298 (threshold=23)
+if frame_schema > 19: u32 field_294
+if frame_schema > 20: u32 field_24c
+if frame_schema >= 22: u32 field_264
+if frame_schema >= 24: u32 field_194 + u32 field_198 (bool)
 ```
 
-### `CPicPage::Serialize`
+Tested with schemas: 0, 1, 2, 3, 7, 13, 18, 24, 26, 29, 32, 46,
+114, 128, 174, 202, 243, 252, 255 — all parse with 100% consumption.
+
+### `CPicPage::Serialize` (loading path at 0x905dde)
 
 ```
 CPicObj::Serialize(ar)
 u8  page_schema
-if page_schema != 4: u16  stage_color_or_similar  → this+0x78
-if page_schema >  4: u16  field_0x7c
-if page_schema <  2: default_init()
-if page_schema >  6: u32  field_0xb4
-if page_schema >  2: FUN_00a47a00(ar)              — additional block (undecoded)
+if page_schema != 4: u16 field_78
+if page_schema >= 5: u16 field_7c
+if page_schema <  2: FUN_903e30 (processing only, no archive reads)
+if page_schema >= 7: u32 field_b4
+if page_schema >= 3: u32 count + count × (u32, u32) — field_84 array (FUN_a47720)
 ```
 
 ### `CPicLayer::Serialize` (loading path at 0xf3e8cf)
@@ -218,9 +226,19 @@ if page_schema >  2: FUN_00a47a00(ar)              — additional block (undecod
 ```
 CPicObj::Serialize(ar)
 u8   layer_schema
-FUN_f34c30 → CString layer_name   (threshold at [0x12b8a78]=11)
+CString layer_name                   — FUN_f34c30 ALWAYS reads (skip path via 0xaee770)
 if layer_schema <= 3: u8 field_type
-if layer_schema >= 4: additional fields (type, color, visibility, lock — not yet decoded)
+if layer_schema >= 4: u8 type + u8 locked + u8 visible
+if layer_schema >= 5: u32 color (ARGB)
+if layer_schema >= 6: u32 field_8c + u32 field_90
+if layer_schema >= 8: u32 field_98
+u8   layer_mode                      — unconditional
+ReadObject parent_ref                — unconditional (u16 null tag if no parent)
+if 7 <= layer_schema < 9: ReadObject
+if 2 <= layer_schema < 6: u8
+if 3 <= layer_schema < 9: u8
+if layer_schema >= 9: u8
+if layer_schema >= 10: u8
 ```
 
 ### `CPicText::Serialize` (loading path at 0x929cf4)
@@ -233,16 +251,41 @@ u8   text_schema
 24B  matrix                          → 0xf2c400
 16B  bounds (4 × s32 twips)          → 0xf2c760
 u8   field_c8
-if text_schema >= 3: u8 extra (consumed, not stored)
-if text_schema >= 5: u32 field_120
-elif text_schema >= 4: u16 → field_120
+if text_schema >= 3: u8 (discarded)
+if text_schema >= 5: u32 field_120 (else u16 if == 4)
 if text_schema >= 4: u16 field_124
-if text_schema >= 4: CString font_name  (via FUN_920900, threshold=10)
-FUN_9295c0 (internal state only, no archive reads)
-if text_schema >= 6: CString field_134  (via FUN_920900, threshold=10)
-if text_schema >= 9: FUN_937590 sub-object at field_74
-if text_schema >= 8: u32 field_10c
-Text content: null-terminated UTF-16LE (no length prefix), follows font data
+if text_schema >= 4: CString field_128   (via FUN_920900, threshold=10)
+if text_schema >= 4 and field_121 & 0x20: CString field_12c
+if multiline (field_121 & 0x40): text_run (FUN_91d310)
+text_body (FUN_9295c0):
+    u16 text_length
+    text_run (FUN_91d310):
+        u8 run_schema + u16 char_count + CColorDef font_name +
+        u32 color + u8 bold + u8 italic + conditional fields
+    text_length × 2 bytes UTF-16LE text data
+if text_schema >= 6:  CString field_134  (via FUN_920900, threshold=10)
+if text_schema >= 9:  FUN_937590 sub-object at field_74
+if text_schema >= 8:  u32 field_10c (clamped 0/1)
+if text_schema >= 11: CString field_138
+if text_schema >= 12: CString field_130
+if text_schema >= 13: u8 filter_flag + optional filter + u16 field_64
+```
+
+**CColorDef (FUN_91d230):** NOT the same as MFC CString. Reads
+u8 count + count×2 bytes UTF-16LE (schema >= 10) or count bytes
+ASCII (schema < 10). Used for font names in text runs.
+
+### `CPicBitmap::Serialize` (loading path at 0x8e8810)
+
+Inheritance: CPicBitmap : CPicObj.
+
+```
+CPicObj::Serialize(ar)
+u8   bitmap_schema
+24B  matrix at this+0x78
+u16  media_id (or ReadObject via sound manager at runtime)
+if bitmap_schema >= 2: u8 filter_flag
+    if filter_flag != 0: filter Serialize (0x84e1e0)
 ```
 
 ### `CPicSymbol::Serialize` (loading path at 0x91719c)
