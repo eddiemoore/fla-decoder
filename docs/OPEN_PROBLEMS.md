@@ -16,8 +16,8 @@ internal character IDs — they contain no inline shape geometry.
 - Timeline keyframes with labels, char_ids, instance names
 - Timeline composition (FUN_8facd0: type_id, format_type, char_ids, label)
 - All AS2 scripts (frame scripts, onClipEvent handlers)
-- Text: font name (from CColorDef), font color, bold/italic, text content
-- Layer metadata (name, type, lock, visible, outline color)
+- Text: font name (CColorDef), font color, bold/italic, text content (text runs)
+- Layer metadata (name, type, lock, visible, outline color, mode, parent ref)
 - Shape tweens (CPicMorphShape with morph coordinates)
 - Background color + frame rate
 - Publish settings (130+ key-value pairs per FLA)
@@ -26,16 +26,15 @@ internal character IDs — they contain no inline shape geometry.
 - CS4 motion tweens (AnimationCore XML)
 - Stage dimensions
 - CPicFrame full tail (schema >= 19): 12 post-timeline fields
-- CPicPage: field_b4 + field_84 array
+- CPicLayer: all conditional fields (mode, parent ReadObject, schema 2-10 u8s)
+- CPicPage: field_b4 + field_84 array (2 × u32 per entry)
 
-**Byte consumption: 99.5%** (941,133/945,528 bytes across test corpus)
+**Byte consumption: 100.0%** (945,525/945,528 — 3 bytes of OLE2 padding)
 
 **What remains partially decoded:**
 - Per-frame placement data (transform matrix, depth, blend mode)
 - char_id → symbol mapping (runtime-computed, resolvable by naming)
 - CPicFrame schema 10-18 tail (no test files with these schemas)
-- CPicText post-body fields (schema >= 9 sub-object, schema >= 13 filters)
-- CPicSprite complex sub-objects (FUN_5c5b00, FUN_5d4790)
 - CS4 3D transforms (no test file found with Rotation_X/Y/Translation_Z)
 
 ---
