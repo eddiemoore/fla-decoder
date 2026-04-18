@@ -446,7 +446,9 @@ def read_cpicpage(r: Reader, ar: ArchiveReader) -> dict:
         if ps >= 3:
             cnt = r.u32()
             out['page_field_84_count'] = cnt
-            # Each entry is read by FUN_a47720; skip for now
+            # Each entry is 2 × u32 (FUN_a47720: reads u32 + u32)
+            if 0 < cnt < 10000:
+                out['page_field_84'] = [(r.u32(), r.u32()) for _ in range(cnt)]
     except EOFReader as e:
         out['_page_truncated'] = str(e)
     return out
@@ -466,11 +468,15 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
     try:
         out['layer_schema'] = r.u8()
         ls = out['layer_schema']
-        if ls >= 11:
+        # Layer name CString: ALWAYS read (FUN_f34c30 reads via 0x4710e0
+        # for schema >= 11, or via 0xaee770 for schema < 11)
+        try:
             out['layer_name'] = _read_flash_cstring(r)
+        except EOFReader:
+            pass
         if ls <= 3:
             out['layer_field_type'] = r.u8()
-        if 4 <= ls <= 30:  # guard against misread schemas
+        if 4 <= ls <= 30:
             out['layer_type'] = r.u8()      # 0=normal, 1=guide, 3=mask, 4=masked, 5=folder
             out['layer_locked'] = r.u8()     # 0/1
             out['layer_visible'] = r.u8()    # 0=visible, 1=hidden (outline)
@@ -481,23 +487,60 @@ def read_cpiclayer(r: Reader, ar: ArchiveReader) -> dict:
             out['layer_field_90'] = r.u32()
         if 8 <= ls <= 30:
             out['layer_field_98'] = r.u32()
-        # Remaining fields (layer type enum, parent ref via ReadObject,
-        # conditional flags) are complex and schema-interleaved.
-        # Scan forward for the parent CPicPage's end-marker.
-        end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
-        search = r.pos
-        while search < len(r.buf) - 14:
-            idx = r.buf.find(end_marker, search)
-            if idx < 0 or idx >= len(r.buf) - 14:
-                break
-            after = idx + 10
-            schema_byte = r.buf[after]
-            if schema_byte <= 10:
-                r.pos = idx
-                break
-            search = idx + 1
+        # Unconditional: u8 layer mode + ReadObject parent ref
+        out['layer_mode'] = r.u8()          # field_a0 (always read)
+        parent_tag = r.u16()                 # ReadObject tag (always read)
+        if parent_tag == 0:
+            out['layer_parent'] = None
+        else:
+            out['_layer_parent_tag'] = parent_tag
+            r.pos -= 2  # back up for end-marker scan to handle
+        # Schema 7-8: additional ReadObject
+        if 7 <= ls < 9:
+            obj_tag = r.u16()
+            if obj_tag != 0:
+                out['_layer_obj_tag'] = obj_tag
+                r.pos -= 2
+        # Schema 2-5: u8
+        if 2 <= ls < 6:
+            out['layer_field_2_5'] = r.u8()
+        # Schema 3-8: u8
+        if 3 <= ls < 9:
+            out['layer_field_3_8'] = r.u8()
+        # Schema >= 9: u8
+        if ls >= 9:
+            out['layer_field_9'] = r.u8()
+        # Schema >= 10: u8
+        if ls >= 10:
+            out['layer_field_10'] = r.u8()
     except EOFReader as e:
         out['_layer_truncated'] = str(e)
+    # End-marker scan: find the CPicPage null tag + INT_MIN point.
+    # Multiple end-markers may exist (nested objects also have INT_MIN points).
+    # The CORRECT one is followed by a valid page_schema with reasonable
+    # field values (field_84_count should be small or zero).
+    end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+    search = r.pos
+    while search < len(r.buf) - 14:
+        idx = r.buf.find(end_marker, search)
+        if idx < 0 or idx >= len(r.buf) - 14:
+            break
+        after = idx + 12  # past null_tag(2) + point(8) + extra1(1) + extra2(1)
+        if after >= len(r.buf):
+            search = idx + 1
+            continue
+        schema_byte = r.buf[after]
+        if schema_byte <= 15:
+            # Verify: if page_schema >= 3, field_84_count at after+9 should be small
+            valid = True
+            if schema_byte >= 3 and after + 13 <= len(r.buf):
+                f84_count = struct.unpack_from('<I', r.buf, after + 9)[0]
+                if f84_count > 1000:
+                    valid = False
+            if valid:
+                r.pos = idx
+                break
+        search = idx + 1
     return out
 
 def read_cpicbitmap(r: Reader, ar: ArchiveReader) -> dict:
