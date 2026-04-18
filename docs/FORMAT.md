@@ -8,8 +8,7 @@ XFL zip/xml format also available from CS5+).
 This is the product of reverse engineering Flash 8's `flash.exe` with
 Ghidra + olefile + capstone, resulting in a working Python decoder
 (`fla_decoder/decoder.py`) that achieves **100% byte consumption**
-across a test corpus of 17 FLAs / 166 symbols spanning Flash 5
-through CS6 (2,705,725/2,705,729 bytes — 4 bytes OLE2 padding).
+across 1,007 symbols in 26 FLAs (190MB) spanning Flash 5 through CS6.
 
 > Most of the format was **undocumented anywhere public** — even JPEXS
 > Free Flash Decompiler cannot read binary FLA. The format below was
@@ -62,15 +61,27 @@ by decompiling `CArchive::ReadObject` @ `0x00ee3e6c` and `WriteObject` @
 After the class tag (new or back-ref), the class's own `Serialize(CArchive&)`
 writes/reads its fields.
 
-### Class indexing
+### Class indexing (combined class+object table)
 
-Each `Symbol` stream maintains its own class-table. The first time a class
-is written, the full `0xFFFF ... name` is emitted and the class receives
-index 1. Subsequent occurrences of that class use the compact `(idx | 0x8000)`
-back-reference.
+MFC's `CArchive` uses a **combined table** (`m_pLoadArray`) where each
+NEWCLASS registration allocates **two** entries: one for the
+`CRuntimeClass*` (odd index), one for the created `CObject*` (even index).
+Backref tags index into this combined table.
 
-Pattern example: `0xFFFF 0001 0009 "CPicShape"` declares CPicShape; later
-`04 80` (LE) = `0x8004` back-refs class 4 to create another instance.
+| declaration | combined index | meaning |
+|-------------|----------------|---------|
+| NEWCLASS CPicPage | 1 (class), 2 (object) | first class declared |
+| NEWCLASS CPicLayer | 3 (class), 4 (object) | second class |
+| NEWCLASS CPicFrame | 5 (class), 6 (object) | third class |
+| NEWCLASS CPicShape | 7 (class), 8 (object) | fourth class |
+
+A backref `0x8007` = combined index 7 = CPicShape's CRuntimeClass →
+"create another CPicShape object". This is critical for CPicFrame
+children that contain multiple CPicShape instances.
+
+Pattern example: `0xFFFF 0001 0009 "CPicShape"` declares CPicShape at
+combined index 7; later `07 80` (LE) = `0x8007` back-refs combined
+index 7 to create another CPicShape.
 
 ### Length-prefixed strings (`FF FE FF <len> <chars>`)
 

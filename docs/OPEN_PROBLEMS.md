@@ -2,9 +2,9 @@
 
 ## Current state
 
-The decoder parses **100% of bytes** across a 17-FLA / 166-symbol test
-corpus (4 bytes OLE2 padding excluded). It renders shapes to SVG and
-extracts all recoverable metadata from binary FLAs spanning Flash 5
+The decoder parses **100% of bytes** across 1,007 symbols in 26 FLAs
+(17 fixture + 9 production, totalling 190MB). It renders shapes to SVG
+and extracts all recoverable metadata from binary FLAs spanning Flash 5
 through CS6.
 
 **What's fully extracted:**
@@ -28,11 +28,12 @@ through CS6.
 - CPicLayer: all conditional fields (mode, parent ReadObject, schema 2-10 u8s)
 - CPicPage: field_b4 + field_84 array (2 × u32 per entry)
 
-**Byte consumption: 100.0%** (2,705,725/2,705,729 — 4 bytes OLE2 padding
-across 17 FLAs / 166 symbols, including Digital Classroom lesson files)
+**Byte consumption: 100.0%** — verified on:
+- 17 fixture FLAs / 166 symbols (2.7MB): 4 bytes OLE2 padding
+- 9 production FLAs / 841 symbols (187MB): zero gap, zero errors
 
-**Frame schemas tested:** 0, 1, 2, 3, 7, 13, 18, 24, 26, 29, 32, 46,
-114, 128, 174, 202, 243, 252, 255 — all parse correctly.
+**Frame schemas tested:** 0, 1, 2, 3, 7, 13, 18, 23, 24, 26, 29, 32,
+46, 114, 128, 174, 202, 243, 252, 255 — all parse correctly.
 
 **What remains partially decoded:**
 - Per-frame placement data (transform matrix, depth, blend mode)
