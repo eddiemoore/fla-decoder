@@ -439,6 +439,12 @@ def read_cpicpage(r: Reader, ar: ArchiveReader) -> dict:
             out['page_field_78'] = r.u16()
         if ps >= 5:
             out['page_field_7c'] = r.u16()
+        if ps >= 7:
+            out['page_field_b4'] = r.u32()
+        if ps >= 3:
+            cnt = r.u32()
+            out['page_field_84_count'] = cnt
+            # Each entry is read by FUN_a47720; skip for now
     except EOFReader as e:
         out['_page_truncated'] = str(e)
     return out
@@ -847,32 +853,61 @@ def read_cpicbutton(r: Reader, ar: ArchiveReader) -> dict:
     if idx >= 0 and idx < len(r.buf) - 12:
         r.pos = idx
     return out
+def _read_fun_8facd0(r: Reader, ar: ArchiveReader) -> dict:
+    """FUN_8facd0: timeline sub-object reader (schema >= 19).
+       Reads type_id, format_type, optional entries, and a CString."""
+    result = {}
+    result['type_id'] = r.u32()
+    result['format_type'] = r.u32()
+    if result['type_id'] >= 1:
+        result['tl_init'] = r.u32()
+        count = r.u32()
+        result['tl_count'] = count
+        if count > 0 and count < 10000:
+            result['tl_char_ids'] = [r.u32() for _ in range(count)]
+    # format_type dispatch: 0=FUN_498020, 1=FUN_8f9290, 2=CString
+    if result['format_type'] == 1 and result['type_id'] >= 4:
+        result['tl_label'] = _read_flash_cstring(r)
+    elif result['format_type'] == 0:
+        # FUN_498020: per-frame sub-structure (u32 schema + u32 count + entries)
+        result['tl_pf_schema'] = r.u32()
+        pf_count = r.u32()
+        result['tl_pf_count'] = pf_count
+        if pf_count > 0 and pf_count < 10000:
+            result['tl_pf_char_ids'] = [r.u32() for _ in range(pf_count)]
+    return result
+
+
 def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
     """CPicFrame : CPicShape : CPicObj. Reads the inherited CPicShape body
        first (which itself reads CPicObj's), then CPicFrame's own
        schema-dependent tail fields.
 
-       Tail layout (decompiled from loading path at 0x8fe3fa):
+       Full layout (decompiled from loading path at 0x8fe3fa + 0x8fe9b9):
          u8  frame_schema
          u16 field_18c
          if frame_schema > 2:   u16 → field_188
          else:                   u8  → field_188
          if frame_schema > 1:   s16 → field_190
-         if frame_schema > 4:   media ref (u32 or CMediaSound lookup)
+         if frame_schema > 4:   u16 → sound ref (CMediaSound)
          if frame_schema > 5:   u16 count + count × (u32 + u16 + u16)
          if frame_schema > 6:   u16 + u8 + u32 + s32
          if frame_schema > 7:   u16 → field_248
-         if frame_schema > 8:   FUN_008f9120 → CString field_250 (threshold=23)
+         if frame_schema > 8:   CString field_250 (threshold=23)
          Branch on schema:
-           >= 18: FUN_008facd0 (timeline sub-object, variable)
-           10-17: FUN_008fd980 (u32 + variable data)
+           >= 19: FUN_008facd0 (timeline sub-object, variable)
+           10-18: FUN_008fd980 (u32 + variable data)
            4-9:   FUN_008faad0 + FUN_008f9570 (jump table, complex)
          if frame_schema > 10:  u32 field_258 + u32 field_25c
-         if frame_schema > 11:  u32
-         if frame_schema > 12:  ReadObject CPicMorphShape (via 0x771700)
+         if frame_schema > 11:  u32 field_254 (clamped ≤ 1)
+         if frame_schema > 12:  ReadObject CPicMorphShape
          if frame_schema > 13:  u32 field_1e4
-         if frame_schema > 14:  ReadObject CObList (via 0xefefd0)
-         if frame_schema > 15:  FUN_008f9120 → CString + complex"""
+         if frame_schema > 14:  ReadObject CObList
+         if frame_schema > 15:  CString field_298 (threshold=23)
+         if frame_schema > 19:  u32 field_294
+         if frame_schema > 20:  u32 field_24c
+         if frame_schema >= 22: u32 field_264
+         if frame_schema >= 24: u32 field_194 + u32 field_198 (bool)"""
     out = read_cpicshape(r, ar)
     try:
         out['frame_schema'] = r.u8()
@@ -885,7 +920,7 @@ def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
         if fs > 1:
             out['frame_190'] = r.s16()
         if fs > 4:
-            out['frame_sound_id'] = r.u32()
+            out['frame_sound_id'] = r.u16()
         if fs > 5:
             cnt = r.u16()
             out['frame_entries_count'] = cnt
@@ -902,33 +937,77 @@ def read_cpicframe(r: Reader, ar: ArchiveReader) -> dict:
         if fs > 7:
             out['frame_248'] = r.u16()
         if fs > 8:
-            # FUN_008f9120: CString field_250 (only if schema >= 23)
             if fs >= 23:
                 try:
                     out['frame_250'] = _read_flash_cstring(r)
                 except EOFReader:
                     pass
-            # The variable-length middle section (FUN_008facd0/008fd980/008faad0)
-            # is too complex to decode inline. Skip forward to the parent
-            # CPicLayer's children-loop end marker. We look for the end-marker
-            # pattern followed by a valid layer_schema (u8) + Flash CString
-            # marker (ff fe ff) to avoid false positives from nested objects.
-            out['_frame_tail_unparsed'] = True
-            end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
-            search = r.pos
-            while search < len(r.buf) - 14:
-                idx = r.buf.find(end_marker, search)
-                if idx < 0 or idx >= len(r.buf) - 14:
-                    break
-                after = idx + 10
-                schema_byte = r.buf[after]
-                # Valid layer_schema: 0-30, followed by ff-fe-ff (CString) within 2 bytes
-                if schema_byte <= 30:
-                    rest = r.buf[after+1:after+5]
-                    if b'\xff\xfe\xff' in rest or schema_byte == 0:
-                        r.pos = idx
+            # Timeline sub-object: schema-dependent dispatch
+            if fs >= 19:
+                try:
+                    out['timeline'] = _read_fun_8facd0(r, ar)
+                except EOFReader:
+                    out['_timeline_truncated'] = True
+            elif fs >= 10:
+                # FUN_8fd980: simpler timeline data
+                out['_frame_tail_unparsed'] = True
+                # Fall through to end-marker scan below
+            else:
+                out['_frame_tail_unparsed'] = True
+            # Post-timeline fields (schema > 10 onwards)
+            if fs > 10 and not out.get('_frame_tail_unparsed'):
+                try:
+                    out['frame_258'] = r.u32()
+                    out['frame_25c'] = r.u32()
+                    if fs > 11:
+                        out['frame_254'] = r.u32()
+                    if fs > 12:
+                        morph_tag = r.u16()
+                        if morph_tag == 0:
+                            out['frame_morph'] = None
+                        else:
+                            # Non-null: back up and let the archive reader handle it
+                            r.pos -= 2
+                            out['_frame_morph_tag'] = morph_tag
+                    if fs > 13:
+                        out['frame_1e4'] = r.u32()
+                    if fs > 14:
+                        oblist_tag = r.u16()
+                        if oblist_tag == 0:
+                            out['frame_oblist'] = None
+                        else:
+                            r.pos -= 2
+                            out['_frame_oblist_tag'] = oblist_tag
+                    if fs > 15:
+                        if fs >= 23:
+                            out['frame_298'] = _read_flash_cstring(r)
+                    if fs > 19:
+                        out['frame_294'] = r.u32()
+                    if fs > 20:
+                        out['frame_24c'] = r.u32()
+                    if fs >= 22:
+                        out['frame_264'] = r.u32()
+                    if fs >= 24:
+                        out['frame_194'] = r.u32()
+                        out['frame_198'] = r.u32()
+                except EOFReader:
+                    out['_frame_post_truncated'] = True
+            # For schemas 10-18 or if parsing failed, use end-marker scan
+            if out.get('_frame_tail_unparsed'):
+                end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
+                search = r.pos
+                while search < len(r.buf) - 14:
+                    idx = r.buf.find(end_marker, search)
+                    if idx < 0 or idx >= len(r.buf) - 14:
                         break
-                search = idx + 1
+                    after = idx + 10
+                    schema_byte = r.buf[after]
+                    if schema_byte <= 30:
+                        rest = r.buf[after+1:after+5]
+                        if b'\xff\xfe\xff' in rest or schema_byte == 0:
+                            r.pos = idx
+                            break
+                    search = idx + 1
     except EOFReader as e:
         out['_frame_tail_truncated'] = str(e)
     return out
