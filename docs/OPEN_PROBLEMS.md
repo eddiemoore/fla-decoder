@@ -11,11 +11,12 @@ internal character IDs — they contain no inline shape geometry.
 **What's fully extracted:**
 - All vector shapes (fills, strokes, gradients, transforms)
 - Audio (WAV/MP3 from Media streams)
-- Bitmaps (JPEG/PNG/lossless)
+- Bitmaps (JPEG/PNG/lossless) + CPicBitmap metadata (schema, matrix, media_id)
 - Symbol library table (names, types, timestamps from Contents stream DOM)
 - Timeline keyframes with labels, char_ids, instance names
+- Timeline composition (FUN_8facd0: type_id, format_type, char_ids, label)
 - All AS2 scripts (frame scripts, onClipEvent handlers)
-- Text content, font names, font sizes, bounding rects
+- Text: font name (from CColorDef), font color, bold/italic, text content
 - Layer metadata (name, type, lock, visible, outline color)
 - Shape tweens (CPicMorphShape with morph coordinates)
 - Background color + frame rate
@@ -24,12 +25,17 @@ internal character IDs — they contain no inline shape geometry.
 - CS4 IK bones (BridgeTree/ikTreeStates XML)
 - CS4 motion tweens (AnimationCore XML)
 - Stage dimensions
+- CPicFrame full tail (schema >= 19): 12 post-timeline fields
+- CPicPage: field_b4 + field_84 array
+
+**Byte consumption: 99.5%** (941,133/945,528 bytes across test corpus)
 
 **What remains partially decoded:**
 - Per-frame placement data (transform matrix, depth, blend mode)
 - char_id → symbol mapping (runtime-computed, resolvable by naming)
-- CPicFrame schema 10-18 tail (FUN_8fd980/8faad0, no test files with these schemas)
-- CPicText text runs and body (complex sub-structures in 0x91d310/0x9295c0)
+- CPicFrame schema 10-18 tail (no test files with these schemas)
+- CPicText post-body fields (schema >= 9 sub-object, schema >= 13 filters)
+- CPicSprite complex sub-objects (FUN_5c5b00, FUN_5d4790)
 - CS4 3D transforms (no test file found with Rotation_X/Y/Translation_Z)
 
 ---
