@@ -891,20 +891,34 @@ def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
        Decompiled from CPicSprite::Serialize at primary vtable slot 2
        (VA 0x00913d80 in flash.exe):
          CPicSymbol::Serialize(archive)
-         u8  sprite_schema          (read directly from stream)
-         if sprite_schema >= 2: FUN_008facd0(archive, &this->field_f4)
-         FUN_00913bc0(archive, sprite_schema, &this->field_160)  — frame data
-         if sprite_schema >= 3: FUN_005c5b00(archive, &this->field_164)
-         if sprite_schema >= schema_level_6: FUN_00937590(&this->field_150, archive, mode)
-         if sprite_schema >= 5: u32 → this->field_190
-         if sprite_schema >= 8: FUN_005d4790(&this->field_15c, archive)
+         u8  sprite_schema
+         if sprite_schema >= 2: FUN_008facd0(archive, &field_f4) — timeline
+         FUN_00913bc0: conditional CString field_160 (threshold=7)
+         if sprite_schema >= 3: FUN_005c5b00(archive, &field_164) — complex
+         if sprite_schema >= 5: u32 → field_190
+         if sprite_schema >= 8: FUN_005d4790(archive) — u8 + u32
     """
     out = read_cpicsymbol_fields(r, ar)
     try:
         out['sprite_schema'] = r.u8()
+        ss = out['sprite_schema']
         sprite_data_start = r.pos
-        # Extract frame labels and strings from remaining sprite body
-        # by scanning for ff-fe-ff string markers.
+
+        # Timeline data (same FUN_8facd0 as CPicFrame)
+        if ss >= 2:
+            try:
+                out['sprite_timeline'] = _read_fun_8facd0(r, ar)
+            except EOFReader:
+                out['_sprite_timeline_truncated'] = True
+
+        # Conditional CString field_160 (threshold at [0x12b95a0]=7)
+        if ss >= 7:
+            try:
+                out['sprite_field_160'] = _read_flash_cstring(r)
+            except EOFReader:
+                pass
+
+        # Extract frame labels from remaining sprite body via string scan
         sprite_body = r.buf[r.pos:]
         labels = []
         i = 0
@@ -921,9 +935,8 @@ def read_cpicsprite(r: Reader, ar: ArchiveReader) -> dict:
                 i += 1
         if labels:
             out['sprite_labels'] = labels
-        out['_sprite_body_bytes'] = len(sprite_body)
-        # Skip forward to where the parent's children loop expects us.
-        # Scan for: null tag (00 00) + INT_MIN point (00 00 00 80 00 00 00 80).
+
+        # Skip to end-marker for complex remaining fields
         end_marker = b'\x00\x00\x00\x00\x00\x80\x00\x00\x00\x80'
         idx = r.buf.find(end_marker, r.pos)
         if idx >= 0 and idx < len(r.buf) - 12:

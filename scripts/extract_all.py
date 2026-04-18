@@ -208,6 +208,41 @@ def extract_all(fla_path: str) -> dict:
                     'width': (b.get('right', 0) - b.get('left', 0)) / 20.0,
                     'height': (b.get('bottom', 0) - b.get('top', 0)) / 20.0,
                 }
+            # Text run formatting
+            body = txt.get('text_body', {})
+            run = body.get('text_run', {})
+            if run.get('font_color'):
+                sym['text']['color'] = f'#{run["font_color"] & 0xFFFFFF:06x}'
+            if run.get('bold'):
+                sym['text']['bold'] = True
+            if run.get('italic'):
+                sym['text']['italic'] = True
+
+        # Timeline composition (from CPicFrame tail)
+        def find_all(node, cls):
+            results = []
+            if isinstance(node, dict):
+                if node.get('class') == cls or (cls is None and 'timeline' in node):
+                    results.append(node)
+                for v in node.values():
+                    results.extend(find_all(v, cls))
+            elif isinstance(node, list):
+                for x in node:
+                    results.extend(find_all(x, cls))
+            return results
+
+        frames_with_tl = find_all(decoded['body'], None)
+        tl_entries = []
+        for f in frames_with_tl:
+            tl = f.get('timeline', {})
+            if tl.get('tl_count', 0) > 0:
+                tl_entries.append({
+                    'type_id': tl['type_id'],
+                    'format_type': tl['format_type'],
+                    'char_ids': tl.get('tl_char_ids', []),
+                })
+        if tl_entries:
+            sym['timeline_entries'] = tl_entries
 
         # Sprite
         sp = find(decoded['body'], 'CPicSprite')
